@@ -1,0 +1,20 @@
+[project]
+name = "agent-duet"
+version = "0.1.0"
+description = "Ask Claude Code and Codex the same question, then let them review each other."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+duet = "duet.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "duet"
+
+[dependency-groups]
+dev = ["pytest>=8"]

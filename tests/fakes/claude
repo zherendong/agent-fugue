@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Stands in for `claude -p --output-format stream-json --verbose` in tests.
+
+Logs each call (arguments, prompt, folder) to $FAKE_LOG_DIR/calls.jsonl and
+prints a stream like the real tool: init, a tool call, the reply in pieces,
+then the result. FAKE_CLAUDE_FAIL=1 makes it fail; FAKE_OBJECTIONS sets the
+objection count it reports; FAKE_SLEEP pauses mid-work.
+"""
+import json, os, sys, time, uuid
+
+def out(obj):
+    print(json.dumps(obj), flush=True)
+
+args = sys.argv[1:]
+prompt = sys.stdin.read()
+session = args[args.index("--resume") + 1] if "--resume" in args else str(uuid.uuid4())
+log = os.path.join(os.environ["FAKE_LOG_DIR"], "calls.jsonl")
+with open(log, "a") as f:
+    f.write(json.dumps({"agent": "claude", "args": args, "prompt": prompt, "cwd": os.getcwd(), "session": session}) + "\n")
+calls = sum(1 for line in open(log) if json.loads(line)["agent"] == "claude")
+
+out({"type": "system", "subtype": "init", "session_id": session, "cwd": os.getcwd()})
+out({"type": "assistant", "session_id": session, "message": {"content": [
+    {"type": "text", "text": "Let me look at the code."},
+    {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": os.path.join(os.getcwd(), "src/cache.py")}}]}})
+out({"type": "user", "session_id": session, "message": {"content": [
+    {"type": "tool_result", "tool_use_id": "t1", "is_error": True, "content": "File does not exist."}]}})
+out({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 1500, "session_id": session})
+time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
+
+if os.environ.get("FAKE_CLAUDE_FAIL") == "1":
+    out({"type": "result", "is_error": True, "result": "simulated Claude failure", "session_id": session})
+    sys.exit(1)
+
+remaining = os.environ.get("FAKE_OBJECTIONS", "1")
+reply = f"Claude reply number {calls}.\n\n# A heading from Claude\n\nSome analysis.\n\nObjections: {remaining}"
+for i in range(0, len(reply), 20):
+    out({"type": "stream_event", "session_id": session, "event": {
+        "type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": reply[i:i + 20]}}})
+out({"type": "assistant", "session_id": session, "message": {"content": [{"type": "text", "text": reply}]}})
+out({"type": "result", "subtype": "success", "is_error": False, "result": reply,
+     "session_id": session, "total_cost_usd": 0.01})

@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Stands in for `codex exec --json` and `codex exec resume --json` in tests.
+
+Logs each call to $FAKE_LOG_DIR/calls.jsonl, prints JSONL events like the
+real tool and writes its reply to the -o file. FAKE_CODEX_FAIL=1 makes it
+fail; FAKE_SLEEP pauses mid-work.
+"""
+import json, os, sys, time, uuid
+
+def out(obj):
+    print(json.dumps(obj), flush=True)
+
+args = sys.argv[1:]
+if args[:2] == ["debug", "models"]:  # Codex's model catalog, in the shape the real tool prints
+    levels = lambda *names: [{"effort": n, "description": n} for n in names]
+    print(json.dumps({"models": [
+        {"slug": "gpt-test-big", "display_name": "GPT-Test-Big", "visibility": "list",
+         "default_reasoning_level": "low", "supported_reasoning_levels": levels("low", "medium", "high", "ultra")},
+        {"slug": "gpt-test-small", "display_name": "GPT-Test-Small", "visibility": "list",
+         "default_reasoning_level": "medium", "supported_reasoning_levels": levels("low", "medium")},
+        {"slug": "gpt-hidden", "display_name": "Hidden", "visibility": "hide", "supported_reasoning_levels": []},
+    ]}))
+    sys.exit(0)
+prompt = sys.stdin.read() if args[-1] == "-" else args[-1]
+resume = len(args) > 1 and args[1] == "resume"
+session = args[-2] if resume else str(uuid.uuid4())
+out_file = args[args.index("-o") + 1]
+log = os.path.join(os.environ["FAKE_LOG_DIR"], "calls.jsonl")
+with open(log, "a") as f:
+    f.write(json.dumps({"agent": "codex", "args": args, "prompt": prompt, "cwd": os.getcwd(), "session": session}) + "\n")
+calls = sum(1 for line in open(log) if json.loads(line)["agent"] == "codex")
+
+out({"type": "thread.started", "thread_id": session})
+out({"type": "turn.started"})
+out({"type": "item.completed", "item": {"id": "item_0", "type": "reasoning", "text": "**Checking the cache layer**"}})
+out({"type": "item.started", "item": {"id": "item_1", "type": "command_execution",
+     "command": "/bin/zsh -lc 'rg -n cache src'", "status": "in_progress"}})
+time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
+out({"type": "item.completed", "item": {"id": "item_1", "type": "command_execution",
+     "command": "/bin/zsh -lc 'rg -n cache src'", "exit_code": 1, "status": "completed"}})
+if os.environ.get("FAKE_CODEX_FAIL") == "1":
+    out({"type": "error", "message": "simulated Codex failure"})
+    out({"type": "turn.failed", "error": {"message": "simulated Codex failure"}})
+    sys.exit(1)
+
+remaining = os.environ.get("FAKE_OBJECTIONS", "1")
+reply = f"Codex reply number {calls}.\n\n| Option | Verdict |\n|---|---|\n| Cache in memory | **yes** |\n\n**Objections: {remaining}**"
+with open(out_file, "w") as f:
+    f.write(reply)
+out({"type": "item.completed", "item": {"id": "item_2", "type": "agent_message", "text": reply}})
+out({"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 10}})
