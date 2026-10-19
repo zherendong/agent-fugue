@@ -1,8 +1,10 @@
 [project]
 name = "agent-fugue"
 version = "0.1.0"
-description = "Ask Claude Code and Codex the same question, then let them review each other."
+description = "Ask two coding agents (Claude Code, Codex) the same question, then let them review each other."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
 

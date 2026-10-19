@@ -208,3 +208,7 @@ scripts/demo-web.sh
 ```
 
 The tests run whole discussions, and the web server's API, against two fake agents in `tests/fakes/`. The fakes mimic the live output of `claude -p --output-format stream-json` and `codex exec --json` and log exactly what they were sent. `scripts/demo-web.sh` runs the page against the same fakes (on port 8799, storing discussions in `.demo/`), to try the page without calling either agent.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
