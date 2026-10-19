@@ -1,4 +1,4 @@
-"""The messages duet sends to the council's members.
+"""The messages fugue sends to the council's members.
 
 Everything the members are told about each other is in this file, so the
 wording can be tuned in one place.
@@ -28,7 +28,7 @@ NAMES = {"claude": "Claude", "codex": "Codex"}  # for the user's eyes only, neve
 
 # How a forwarded reply is wrapped, by the kind of round it came from. The
 # kinds "review", "discuss" and "final" are from discussions made by earlier
-# versions of duet.
+# versions of fugue.
 ANSWER_KINDS = ("answer", "update", "final")
 COMMENT_KINDS = ("comment", "review")
 

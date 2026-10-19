@@ -1,4 +1,4 @@
-"""Defaults from ~/.config/duet/config.toml, and creating discussions from them."""
+"""Defaults from ~/.config/fugue/config.toml, and creating discussions from them."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ import tomllib
 from pathlib import Path
 
 from .agents import find_binary
-from .store import AGENTS, DEFAULT_CONTROL, Discussion, DuetError
+from .store import AGENTS, DEFAULT_CONTROL, Discussion, FugueError
 
 DEFAULT_TIMEOUT_MINUTES = 30
 CONTROL_KEYS = ("max_rounds", "pause_after_each_round")
 
 
 def config_path() -> Path:
-    return Path(os.environ.get("DUET_CONFIG") or "~/.config/duet/config.toml").expanduser()
+    return Path(os.environ.get("FUGUE_CONFIG") or "~/.config/fugue/config.toml").expanduser()
 
 
 def load_config() -> dict:
@@ -26,7 +26,7 @@ def load_config() -> dict:
         with open(path, "rb") as handle:
             return tomllib.load(handle)
     except tomllib.TOMLDecodeError as exc:
-        raise DuetError(f"Could not read {path}: {exc}") from None
+        raise FugueError(f"Could not read {path}: {exc}") from None
 
 
 def make_title(question: str) -> str:
@@ -41,16 +41,16 @@ def new_discussion(question: str, *, cwd: Path, title: str | None = None, timeou
     """Create a discussion from the config file's defaults with the given values on top.
 
     `models` and `efforts` that are None fall back to the config file, then to the
-    tool's own default (duet passes nothing).
+    tool's own default (fugue passes nothing).
     `extra_args` values are strings in shell syntax, added after the config file's args.
-    `control` values that are None fall back to the config file, then to duet's defaults.
+    `control` values that are None fall back to the config file, then to fugue's defaults.
     """
     question = question.strip()
     if not question:
-        raise DuetError("The question is empty.")
+        raise FugueError("The question is empty.")
     cwd = cwd.expanduser().resolve()
     if not cwd.is_dir():
-        raise DuetError(f"Not a folder: {cwd}")
+        raise FugueError(f"Not a folder: {cwd}")
     for agent in AGENTS:
         find_binary(agent)
     config = load_config()

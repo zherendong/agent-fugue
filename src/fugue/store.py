@@ -1,6 +1,6 @@
 """Where discussions live on disk, and reading and writing their files.
 
-Every discussion is a folder under ~/.duet/discussions/ (or $DUET_HOME/discussions/).
+Every discussion is a folder under ~/.fugue/discussions/ (or $FUGUE_HOME/discussions/).
 Only the process running a discussion writes its state and its event log.
 Anyone (the command line, the web page) may add notes and requests to its
 inbox or change its controls; the running process picks them up.
@@ -13,6 +13,8 @@ import json
 import os
 import random
 import re
+import shutil
+import subprocess
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,7 +31,7 @@ DEFAULT_CONTROL = {
 }
 
 
-class DuetError(Exception):
+class FugueError(Exception):
     """An error to show the user as a plain message, without a traceback."""
 
 
@@ -51,12 +53,12 @@ def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def duet_home() -> Path:
-    return Path(os.environ.get("DUET_HOME") or "~/.duet").expanduser().absolute()
+def fugue_home() -> Path:
+    return Path(os.environ.get("FUGUE_HOME") or "~/.fugue").expanduser().absolute()
 
 
 def discussions_dir() -> Path:
-    path = duet_home() / "discussions"
+    path = fugue_home() / "discussions"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -131,10 +133,10 @@ class Discussion:
     @classmethod
     def by_id(cls, ident: str) -> "Discussion":
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", ident):
-            raise DuetError(f"No discussion with id {ident!r}.")
+            raise FugueError(f"No discussion with id {ident!r}.")
         path = discussions_dir() / ident
         if not (path / "state.json").exists():
-            raise DuetError(f"No discussion with id {ident!r}.")
+            raise FugueError(f"No discussion with id {ident!r}.")
         return cls.load(path)
 
     def reload(self) -> None:
@@ -185,6 +187,28 @@ class Discussion:
 
     def read_reply(self, index: int, agent: str) -> str:
         return self.reply_path(index, agent).read_text()
+
+    def move_to_trash(self) -> None:
+        """Move this discussion's folder to the Trash, where it can be restored from Finder.
+
+        Claude's and Codex's own sessions are left alone. $FUGUE_TRASH names a folder
+        to move it to instead (the tests use it); without the macOS `trash`
+        command, it goes to the fugue folder's own trash/.
+        """
+        if self.runner_pid() is not None:
+            raise FugueError("This discussion is running. Stop it first, then delete it.")
+        target = os.environ.get("FUGUE_TRASH")
+        if not target and shutil.which("trash"):
+            result = subprocess.run(["trash", str(self.path)], capture_output=True, text=True)
+            if result.returncode != 0:
+                raise FugueError(f"Couldn't move it to the Trash: {(result.stderr or result.stdout).strip()}")
+            return
+        folder = Path(target) if target else fugue_home() / "trash"
+        folder.mkdir(parents=True, exist_ok=True)
+        destination = folder / self.id
+        if destination.exists():
+            destination = folder / f"{self.id}-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.move(str(self.path), str(destination))
 
     def runner_pid(self) -> int | None:
         """The process running this discussion right now, if any."""
@@ -257,7 +281,7 @@ class Discussion:
     def update_control(self, **changes) -> dict:
         unknown = set(changes) - set(DEFAULT_CONTROL)
         if unknown:
-            raise DuetError(f"Unknown setting: {', '.join(sorted(unknown))}")
+            raise FugueError(f"Unknown setting: {', '.join(sorted(unknown))}")
         with self._locked_json("control.json", dict(DEFAULT_CONTROL)) as control:
             control.update(changes)
             return {**DEFAULT_CONTROL, **control}
@@ -319,14 +343,14 @@ def select_discussion(ident: str | None, cwd: Path | None = None) -> Discussion:
     """
     discussions = list_discussions()
     if not discussions:
-        raise DuetError('No discussions yet. Start one with `duet start "your question"`.')
+        raise FugueError('No discussions yet. Start one with `fugue start "your question"`.')
     if ident is None:
         here = str((cwd or Path.cwd()).resolve())
         local = [d for d in discussions if d.state["cwd"] == here]
         return (local or discussions)[-1]
     matches = [d for d in discussions if d.id == ident] or [d for d in discussions if d.id.startswith(ident)]
     if not matches:
-        raise DuetError(f"No discussion matches {ident!r}. See `duet list`.")
+        raise FugueError(f"No discussion matches {ident!r}. See `fugue list`.")
     if len(matches) > 1:
-        raise DuetError(f"{ident!r} matches several discussions: {', '.join(d.id for d in matches)}")
+        raise FugueError(f"{ident!r} matches several discussions: {', '.join(d.id for d in matches)}")
     return matches[0]

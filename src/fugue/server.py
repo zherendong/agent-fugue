@@ -1,4 +1,4 @@
-"""The local web server behind `duet web`.
+"""The local web server behind `fugue web`.
 
 It serves the page, a small JSON API, and a live stream of each discussion's
 events (Server-Sent Events, read from the discussion's event log, so
@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__, engine, transcript
 from .agents import find_binary
-from .store import AGENTS, Discussion, DuetError, list_discussions
+from .store import AGENTS, Discussion, FugueError, list_discussions
 
 STATIC_FILES = {"app.js": "text/javascript", "app.css": "text/css"}
 CONTROL_KEYS = {"paused": bool, "pause_after_each_round": bool, "max_rounds": int}
@@ -109,7 +109,7 @@ class App:
 
 class Handler(BaseHTTPRequestHandler):
     app: App
-    server_version = f"duet/{__version__}"
+    server_version = f"fugue/{__version__}"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, format, *args) -> None:  # keep the terminal quiet
@@ -141,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.FORBIDDEN, "Requests from other sites are not allowed.")
             return False
         if needs_token:
-            token = self.headers.get("X-Duet-Token") or (query.get("token") or [""])[0]
+            token = self.headers.get("X-Fugue-Token") or (query.get("token") or [""])[0]
             if not secrets.compare_digest(token, self.app.token):
                 self._error(HTTPStatus.UNAUTHORIZED, "Missing or wrong token. Reload the page.")
                 return False
@@ -172,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._api(method, url.path, query)
             else:
                 self._error(HTTPStatus.NOT_FOUND, "Not found.")
-        except (DuetError, BadRequest) as exc:
+        except (FugueError, BadRequest) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -192,9 +192,9 @@ class Handler(BaseHTTPRequestHandler):
     # -- the page
 
     def _static(self, path: str) -> None:
-        web = resources.files("duet") / "web"
+        web = resources.files("fugue") / "web"
         if path in ("/", "/index.html"):
-            page = (web / "index.html").read_text(encoding="utf-8").replace("__DUET_TOKEN__", self.app.token)
+            page = (web / "index.html").read_text(encoding="utf-8").replace("__FUGUE_TOKEN__", self.app.token)
             self._send(HTTPStatus.OK, page.encode(), "text/html; charset=utf-8")
         elif path.startswith("/static/") and path[8:] in STATIC_FILES:
             name = path[8:]
@@ -208,6 +208,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/info" and method == "GET":
             return self._json({"version": __version__, "home": str(Path.home()),
                                "agents": {a: _has_binary(a) for a in AGENTS}})
+        if path == "/api/settings":
+            from .config import config_path
+            from .settings import read_defaults, save_defaults
+
+            if method == "GET":
+                return self._json({"path": str(config_path()), "defaults": read_defaults()})
+            if method == "POST":
+                return self._json({"path": str(config_path()), "defaults": save_defaults(self._body())})
+        if path == "/api/status" and method == "GET":
+            from .settings import status
+
+            return self._json(status(self.app.port))
         if path == "/api/models" and method == "GET":
             from .models import catalog
 
@@ -230,6 +242,9 @@ class Handler(BaseHTTPRequestHandler):
         discussion = Discussion.by_id(ident)
         if action is None and method == "GET":
             return self._json(detail(discussion))
+        if action is None and method == "DELETE":
+            discussion.move_to_trash()
+            return self._json({"ok": True})
         if action == "events" and method == "GET":
             return self._events(discussion, query)
         if action == "prompt" and method == "GET":
@@ -363,7 +378,7 @@ def _has_binary(agent: str) -> bool:
     try:
         find_binary(agent)
         return True
-    except DuetError:
+    except FugueError:
         return False
 
 
@@ -381,7 +396,7 @@ def _checked(key: str, value):
 
 def make_server(port: int, default_cwd: Path) -> tuple[ThreadingHTTPServer, App]:
     app = App(port, default_cwd)
-    handler = type("DuetHandler", (Handler,), {"app": app})
+    handler = type("FugueHandler", (Handler,), {"app": app})
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     httpd.daemon_threads = True
@@ -396,11 +411,11 @@ def serve(port: int, open_browser: bool, default_cwd: Path) -> int:
     try:
         httpd, app = make_server(port, default_cwd)
     except OSError:
-        print(f"Port {port} is already in use; duet web may already be running at {url}", file=sys.stderr)
+        print(f"Port {port} is already in use; fugue web may already be running at {url}", file=sys.stderr)
         if open_browser:
             webbrowser.open(url)
         return 1
-    print(f"duet is running at {url}\nDiscussions started from the page run in this process; "
+    print(f"fugue is running at {url}\nDiscussions started from the page run in this process; "
           "Ctrl-C stops them (continue them later from the page).", file=sys.stderr)
     if open_browser:
         webbrowser.open(url)

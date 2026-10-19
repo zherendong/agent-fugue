@@ -1,4 +1,4 @@
-"""Tests of `duet service` with launchctl and the page replaced by fakes, so nothing is installed."""
+"""Tests of `fugue service` with launchctl and the page replaced by fakes, so nothing is installed."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from duet import cli, service
+from fugue import cli, service
 
 
 class FakeLaunchd:
@@ -40,10 +40,10 @@ def launchd(tmp_path, monkeypatch):
     home = tmp_path / "user"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("DUET_HOME", str(tmp_path / "duet"))
+    monkeypatch.setenv("FUGUE_HOME", str(tmp_path / "fugue"))
     monkeypatch.setenv("PATH", os.pathsep.join(["/opt/homebrew/bin", "/usr/bin", "/opt/homebrew/bin", "/bin"]))
-    monkeypatch.setenv("DUET_CLAUDE_BIN", "/bin/echo")
-    monkeypatch.setenv("DUET_CODEX_BIN", "/bin/echo")
+    monkeypatch.setenv("FUGUE_CLAUDE_BIN", "/bin/echo")
+    monkeypatch.setenv("FUGUE_CODEX_BIN", "/bin/echo")
     monkeypatch.setattr(sys, "platform", "darwin")
     fake = FakeLaunchd()
     monkeypatch.setattr(service, "launchctl", fake)
@@ -61,15 +61,15 @@ def installed_plist() -> dict:
 def test_install_writes_a_launch_agent_and_starts_it(launchd, tmp_path):
     assert cli.main(["service", "install", "--port", "8777"]) == 0
     plist = installed_plist()
-    assert service.plist_path() == tmp_path / "user/Library/LaunchAgents/ai.duet.web.plist"
-    assert plist["Label"] == "ai.duet.web"
+    assert service.plist_path() == tmp_path / "user/Library/LaunchAgents/ai.fugue.web.plist"
+    assert plist["Label"] == "ai.fugue.web"
     assert plist["ProgramArguments"][-4:] == ["web", "--no-open", "--port", "8777"]
     assert plist["RunAtLoad"] is True and plist["KeepAlive"] is True
     assert plist["EnvironmentVariables"]["PATH"] == os.pathsep.join(["/opt/homebrew/bin", "/usr/bin", "/bin"])
-    assert plist["EnvironmentVariables"]["DUET_HOME"] == str(tmp_path / "duet")
+    assert plist["EnvironmentVariables"]["FUGUE_HOME"] == str(tmp_path / "fugue")
     assert plist["EnvironmentVariables"]["HOME"] == str(tmp_path / "user")
     assert plist["EnvironmentVariables"]["LANG"].endswith("UTF-8")
-    assert plist["StandardErrorPath"] == str(tmp_path / "duet/web.log")
+    assert plist["StandardErrorPath"] == str(tmp_path / "fugue/web.log")
     assert plist["WorkingDirectory"] == str(tmp_path / "user")
     assert ("bootstrap", f"gui/{os.getuid()}", str(service.plist_path())) in launchd.calls
     assert service.installed_port() == 8777
@@ -112,7 +112,7 @@ def test_status_and_uninstall(launchd, capsys):
     assert "running (pid 4242)" in out and "http://127.0.0.1:8765/ answers" in out
 
     assert cli.main(["service", "uninstall"]) == 0
-    assert ("bootout", f"gui/{os.getuid()}/ai.duet.web") in launchd.calls
+    assert ("bootout", f"gui/{os.getuid()}/ai.fugue.web") in launchd.calls
     assert not service.plist_path().exists()
     assert cli.main(["service", "uninstall"]) == 0
     assert "isn't installed" in capsys.readouterr().err
@@ -123,7 +123,7 @@ def test_restart_stops_it_cleanly_and_waits_for_the_page(launchd, monkeypatch):
     answers = iter([False, True])  # down once stopped, then up again
     monkeypatch.setattr(service, "page_answers", lambda port: next(answers))
     assert cli.main(["service", "restart"]) == 0
-    assert ("kill", "15", f"gui/{os.getuid()}/ai.duet.web") in launchd.calls  # SIGTERM, not a hard kill
+    assert ("kill", "15", f"gui/{os.getuid()}/ai.fugue.web") in launchd.calls  # SIGTERM, not a hard kill
 
 
 def test_only_on_macos(launchd, monkeypatch, capsys):

@@ -14,7 +14,7 @@ import tomllib
 from functools import cache
 from pathlib import Path
 
-from .store import DuetError
+from .store import FugueError
 from .streams import ClaudeStream, CodexStream, Outcome
 
 # Both agents run read-only: they can read files and run commands, but not
@@ -40,25 +40,33 @@ def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser()
 
 
+def codex_switched_on() -> dict[str, list[str]]:
+    """The plugins and MCP servers that are on in the user's Codex config."""
+    found: dict[str, list[str]] = {"plugins": [], "mcp_servers": []}
+    try:
+        with open(codex_home() / "config.toml", "rb") as handle:
+            config = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return found
+    for section in found:
+        for name, entry in (config.get(section) or {}).items():
+            if isinstance(entry, dict) and entry.get("enabled", True):
+                found[section].append(name)
+    return found
+
+
 def codex_isolation_args() -> list[str]:
-    """Switch off, for duet's runs only, the parts of the user's Codex setup that act outside its sandbox.
+    """Switch off, for fugue's runs only, the parts of the user's Codex setup that act outside its sandbox.
 
     Plugins (computer use, Chrome, ...), MCP servers and the apps connector run
     outside Codex's read-only sandbox, on the machine or in the user's accounts.
     Each one that is on gets a config override; the config file is not changed.
     """
     args = ["--disable", "apps"]
-    try:
-        with open(codex_home() / "config.toml", "rb") as handle:
-            config = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError):
-        return args
-    for section in ("plugins", "mcp_servers"):
-        for name, entry in (config.get(section) or {}).items():
-            if not isinstance(entry, dict) or not entry.get("enabled", True):
-                continue
+    for section, names in codex_switched_on().items():
+        for name in names:
             if "." in name:  # Codex's -c can't address a key with a dot in it
-                raise DuetError(f"duet can't switch off the Codex {section[:-1].replace('_', ' ')} {name!r} for its "
+                raise FugueError(f"fugue can't switch off the Codex {section[:-1].replace('_', ' ')} {name!r} for its "
                                 "runs, because its name contains a dot. Rename or disable it in ~/.codex/config.toml.")
             args += ["-c", f"{section}.{name}.enabled=false"]
     return args
@@ -75,7 +83,7 @@ def claude_read_only_args(cwd: Path, web: bool = True) -> list[str]:
     The Read tool may read anywhere except credential folders, as Codex can in
     its read-only sandbox. With `web`, Claude may also search the web and fetch
     pages, except from this machine (localhost); without it, both tools are off.
-    The settings apply to duet's runs only.
+    The settings apply to fugue's runs only.
     """
     sandbox = {
         "enabled": True,
@@ -115,11 +123,11 @@ def user_temp_dir() -> str:
 
 
 def find_binary(agent: str) -> str:
-    env_name = f"DUET_{agent.upper()}_BIN"
+    env_name = f"FUGUE_{agent.upper()}_BIN"
     name = os.environ.get(env_name, agent)
     path = shutil.which(name)
     if not path:
-        raise DuetError(f"Cannot find the `{name}` command. Install it, or set {env_name} to its path.")
+        raise FugueError(f"Cannot find the `{name}` command. Install it, or set {env_name} to its path.")
     return os.path.abspath(path)  # the agents run in another folder
 
 
@@ -189,7 +197,7 @@ class AgentCall:
         self.started = time.monotonic()
         env = dict(os.environ)
         # Claude Code refuses to start when it thinks it is nested inside
-        # another Claude Code session; duet's calls are separate headless runs.
+        # another Claude Code session; fugue's calls are separate headless runs.
         env.pop("CLAUDECODE", None)
         # The temp folder is the one place Claude's sandbox lets commands write.
         env.setdefault("TMPDIR", user_temp_dir())
@@ -199,7 +207,7 @@ class AgentCall:
         self._files = [stdin, stdout, stderr]
         self._reader = open(self.stdout_path, "r", encoding="utf-8", errors="replace")
         try:
-            # A separate process group lets duet stop the agent together with
+            # A separate process group lets fugue stop the agent together with
             # anything it started, and keeps Ctrl-C from reaching it directly.
             self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, stdin=stdin, stdout=stdout, stderr=stderr,
                                          env=env, start_new_session=True)

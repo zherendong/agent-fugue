@@ -1,4 +1,4 @@
-"""The `duet` command line."""
+"""The `fugue` command line."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from . import __version__, engine, transcript
 from .agents import format_duration
 from .config import DEFAULT_TIMEOUT_MINUTES, new_discussion
 from .prompts import NAMES
-from .store import AGENTS, Discussion, DuetError, list_discussions, select_discussion
+from .store import AGENTS, Discussion, FugueError, list_discussions, select_discussion
 
 
 def err(message: str = "") -> None:
@@ -37,13 +37,13 @@ def read_text(text: str | None, file: str | None, what: str) -> str:
         content = edit_in_editor()
     content = content.strip()
     if not content:
-        raise DuetError(f"The {what} is empty; nothing to do.")
+        raise FugueError(f"The {what} is empty; nothing to do.")
     return content
 
 
 def edit_in_editor() -> str:
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
-    with tempfile.NamedTemporaryFile("w", suffix=".md", prefix="duet-", delete=False) as handle:
+    with tempfile.NamedTemporaryFile("w", suffix=".md", prefix="fugue-", delete=False) as handle:
         path = handle.name
     try:
         subprocess.run([*shlex.split(editor), path], check=False)
@@ -152,12 +152,12 @@ def print_footer(discussion: Discussion) -> None:
     if status.get("detail"):
         err(f"  {status['detail']}")
     if status["phase"] == "running":
-        err("It is running in another process. Watch it with `duet web`.")
+        err("It is running in another process. Watch it with `fugue web`.")
     elif status["phase"] == "finished":
-        err('Ask a follow-up with `duet ask "..."`, or run one more round with `duet next`.')
+        err('Ask a follow-up with `fugue ask "..."`, or run one more round with `fugue next`.')
     else:
-        err(f"Next: {status['next']}. Run `duet continue` for that, or add your view first with "
-            '`duet note "..."`.')
+        err(f"Next: {status['next']}. Run `fugue continue` for that, or add your view first with "
+            '`fugue note "..."`.')
 
 
 def run_here(discussion: Discussion, quiet: bool) -> int:
@@ -224,9 +224,9 @@ def cmd_pause(args: argparse.Namespace) -> int:
     discussion = select_discussion(args.discussion)
     discussion.update_control(paused=True)
     if discussion.runner_pid():
-        err("It will pause when the current round finishes. `duet stop` stops the agents now.")
+        err("It will pause when the current round finishes. `fugue stop` stops the agents now.")
     else:
-        err("Paused. `duet continue` goes on.")
+        err("Paused. `fugue continue` goes on.")
     return 0
 
 
@@ -236,7 +236,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
         err("It isn't running.")
         return 0
     discussion.update_control(stop_requested=True)
-    err("Stopping the agents. `duet continue` retries the round later.")
+    err("Stopping the agents. `fugue continue` retries the round later.")
     return 0
 
 
@@ -246,7 +246,7 @@ def cmd_note(args: argparse.Namespace) -> int:
     to = list(AGENTS) if args.to == "both" else [args.to]
     discussion.add_note(text, to)
     names = " and ".join(NAMES[a] for a in to)
-    err(f"Saved. It will be added to the next message duet sends to {names}.")
+    err(f"Saved. It will be added to the next message fugue sends to {names}.")
     return 0
 
 
@@ -263,7 +263,7 @@ def _cell(entry: dict | None) -> str:
     objections = entry.get("objections")
     if objections is not None:
         text += f", {objections} objection{'' if objections == 1 else 's'}"
-    elif entry.get("remaining") is not None:  # from earlier versions of duet
+    elif entry.get("remaining") is not None:  # from earlier versions of fugue
         text += f", {entry['remaining']} disagreements left"
     return text
 
@@ -322,16 +322,16 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_show(args: argparse.Namespace) -> int:
     discussion = select_discussion(args.discussion)
     if not discussion.rounds:
-        raise DuetError("This discussion has no rounds yet.")
+        raise FugueError("This discussion has no rounds yet.")
     try:
         rnd = discussion.rounds[args.round if args.round is not None else -1]
     except IndexError:
-        raise DuetError(f"There is no round {args.round}; this discussion has "
+        raise FugueError(f"There is no round {args.round}; this discussion has "
                         f"{len(discussion.rounds)} (0 to {len(discussion.rounds) - 1}).") from None
     agents = [a for a in AGENTS if a in rnd["entries"] and (args.agent in (None, a))]
     if args.prompt:
         for agent in agents:
-            print(f"\n━━━ Round {rnd['index']} · exactly what duet sent to {NAMES[agent]} ━━━\n")
+            print(f"\n━━━ Round {rnd['index']} · exactly what fugue sent to {NAMES[agent]} ━━━\n")
             print(discussion.prompt_path(rnd["index"], agent).read_text().rstrip())
         print()
     else:
@@ -352,6 +352,21 @@ def cmd_list(args: argparse.Namespace) -> int:
         folder = discussion.state["cwd"].replace(home, "~", 1)
         status = engine.describe(discussion)["label"]
         print(f"{discussion.id}  {status:<28}  {folder}  {discussion.title}")
+    return 0
+
+
+def cmd_delete(args: argparse.Namespace) -> int:
+    discussion = select_discussion(args.id)
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise FugueError("Pass --yes to delete without being asked.")
+        answer = input(f"Move discussion {discussion.id} ({discussion.title}) to the Trash? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            err("Kept.")
+            return 1
+    discussion.move_to_trash()
+    err(f"Moved {discussion.id} to the Trash. Claude's and Codex's own sessions are kept, so "
+        "`claude --resume` and `codex resume` still find them.")
     return 0
 
 
@@ -391,7 +406,7 @@ def cmd_models(args: argparse.Namespace) -> int:
             extra = f"  (default {model['default_effort']})" if model.get("default_effort") else ""
             print(f"  {model['id']:<{width}}  {model['name']:<18}  {' '.join(model['efforts'])}{extra}")
         print()
-    err("Use them with `duet start --claude-model ID --claude-effort LEVEL` (and --codex-...), "
+    err("Use them with `fugue start --claude-model ID --claude-effort LEVEL` (and --codex-...), "
         "or pick them on the page.")
     return 0
 
@@ -416,10 +431,10 @@ def cmd_service(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="duet",
+        prog="fugue",
         description="Ask Claude Code and Codex the same question, then let them review each other.",
     )
-    parser.add_argument("--version", action="version", version=f"duet {__version__}")
+    parser.add_argument("--version", action="version", version=f"fugue {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     which = argparse.ArgumentParser(add_help=False)
@@ -429,22 +444,22 @@ def build_parser() -> argparse.ArgumentParser:
     quiet.add_argument("-q", "--quiet", action="store_true", help="show progress only, not the replies")
 
     p = sub.add_parser("web", help="open the web page that shows all discussions live")
-    p.add_argument("--port", type=int, default=int(os.environ.get("DUET_PORT", 8765)),
+    p.add_argument("--port", type=int, default=int(os.environ.get("FUGUE_PORT", 8765)),
                    help="port on 127.0.0.1 (default: 8765)")
     p.add_argument("--no-open", action="store_true", help="don't open the browser")
     p.set_defaults(func=cmd_web)
 
     p = sub.add_parser("service", help="keep the web page running in the background (macOS)",
-                       description="Run `duet web` in the background as a launchd agent: it starts when you "
+                       description="Run `fugue web` in the background as a launchd agent: it starts when you "
                                    "log in and starts again if it stops, so the page answers without a "
                                    "terminal window open. It uses the PATH of the shell you install it from.")
     actions = p.add_subparsers(dest="action", required=True, metavar="ACTION")
     s = actions.add_parser("install", help="install it and start it now (again, to change its settings)")
-    s.add_argument("--port", type=int, default=int(os.environ.get("DUET_PORT", 8765)),
+    s.add_argument("--port", type=int, default=int(os.environ.get("FUGUE_PORT", 8765)),
                    help="port on 127.0.0.1 (default: 8765)")
     actions.add_parser("uninstall", help="stop it and remove it")
     actions.add_parser("status", help="show whether it is running and the page answers")
-    actions.add_parser("restart", help="restart it, for example after changing duet's code")
+    actions.add_parser("restart", help="restart it, for example after changing fugue's code")
     p.set_defaults(func=cmd_service)
 
     p = sub.add_parser("start", parents=[quiet], help="ask both agents a new question",
@@ -452,7 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    "comments (each comments on the other's answer) and updates (each rewrites "
                                    "its answer in light of the comments) alternate, until neither has "
                                    "objections or the round limit is reached. It pauses after every round "
-                                   "until you run `duet continue`, unless you pass --no-pause.")
+                                   "until you run `fugue continue`, unless you pass --no-pause.")
     p.add_argument("question", nargs="?",
                    help="the question; use - to read it from stdin, or leave it out to write it in $EDITOR")
     p.add_argument("-f", "--file", help="read the question from this file")
@@ -463,9 +478,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="don't let either member use the web (on by default for both)")
     p.add_argument("--title", help="short name for the discussion (default: the question's first line)")
     p.add_argument("--cwd", help="folder the agents work in (default: the current folder)")
-    p.add_argument("--claude-model", metavar="ID", help="model for Claude, e.g. claude-opus-5-5 (see `duet models`)")
-    p.add_argument("--codex-model", metavar="ID", help="model for Codex, e.g. gpt-6.1-sol (see `duet models`)")
-    p.add_argument("--claude-effort", metavar="LEVEL", help="effort for Claude, e.g. high (see `duet models`)")
+    p.add_argument("--claude-model", metavar="ID", help="model for Claude, e.g. claude-opus-5-5 (see `fugue models`)")
+    p.add_argument("--codex-model", metavar="ID", help="model for Codex, e.g. gpt-6.1-sol (see `fugue models`)")
+    p.add_argument("--claude-effort", metavar="LEVEL", help="effort for Claude, e.g. high (see `fugue models`)")
     p.add_argument("--codex-effort", metavar="LEVEL", help="reasoning effort for Codex, e.g. medium")
     p.add_argument("--claude-args", metavar="ARGS",
                    help='extra arguments for `claude -p`, e.g. --claude-args="--add-dir ../shared"')
@@ -490,7 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("note", parents=[which], help="add your own view to the next round",
-                       description="Save a note from you. duet adds it to the next message it sends.")
+                       description="Save a note from you. fugue adds it to the next message it sends.")
     p.add_argument("text", nargs="?", help="the note; use - for stdin, or leave it out to use $EDITOR")
     p.add_argument("-f", "--file", help="read the note from this file")
     p.add_argument("--to", choices=["both", "claude", "codex"], default="both",
@@ -509,18 +524,25 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("show", parents=[which], help="print the replies from one round")
     p.add_argument("round", nargs="?", type=int, help="round number (default: the last one)")
     p.add_argument("--agent", choices=["claude", "codex"], help="only this agent's reply")
-    p.add_argument("--prompt", action="store_true", help="show exactly what duet sent instead of the reply")
+    p.add_argument("--prompt", action="store_true", help="show exactly what fugue sent instead of the reply")
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("models", help="list the models and effort levels you can choose for each agent",
-                       description="Codex's list comes from `codex debug models` (duet keeps a copy for a "
-                                   "day); Claude's is built into duet, since Claude Code has no such command.")
-    p.add_argument("--refresh", action="store_true", help="ask Codex again instead of using duet's copy")
+                       description="Codex's list comes from `codex debug models` (fugue keeps a copy for a "
+                                   "day); Claude's is built into fugue, since Claude Code has no such command.")
+    p.add_argument("--refresh", action="store_true", help="ask Codex again instead of using fugue's copy")
     p.set_defaults(func=cmd_models)
 
     p = sub.add_parser("list", help="list all discussions, newest first")
     p.add_argument("--here", action="store_true", help="only the ones that run in this folder")
     p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("delete", help="move a discussion to the Trash",
+                       description="Move a discussion's folder to the Trash, where Finder can restore it. "
+                                   "Claude's and Codex's own sessions are kept.")
+    p.add_argument("id", help="the discussion's id, or a unique start of it (see `fugue list`)")
+    p.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
+    p.set_defaults(func=cmd_delete)
 
     p = sub.add_parser("open", parents=[which], help="open the transcript in your default Markdown app")
     p.set_defaults(func=cmd_open)
@@ -540,9 +562,9 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGHUP, _interrupt)
     try:
         return args.func(args)
-    except DuetError as exc:
-        err(f"duet: {exc}")
+    except FugueError as exc:
+        err(f"fugue: {exc}")
         return 1
     except KeyboardInterrupt:
-        err("\nStopped. `duet continue` retries the agents that didn't finish.")
+        err("\nStopped. `fugue continue` retries the agents that didn't finish.")
         return 130

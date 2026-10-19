@@ -1,4 +1,4 @@
-"""Keeping `duet web` running in the background on macOS, as a launchd user agent.
+"""Keeping `fugue web` running in the background on macOS, as a launchd user agent.
 
 The agent starts when the user logs in and is started again if it stops, so the
 page answers without a terminal window left open. It gets the PATH of the shell
@@ -25,9 +25,9 @@ from pathlib import Path
 from typing import Callable
 
 from .agents import find_binary
-from .store import AGENTS, DuetError, duet_home
+from .store import AGENTS, FugueError, fugue_home
 
-LABEL = "ai.duet.web"
+LABEL = "ai.fugue.web"
 PROTECTED_FOLDERS = ("Desktop", "Documents", "Downloads")
 START_TIMEOUT_S = 60
 
@@ -37,7 +37,7 @@ def plist_path() -> Path:
 
 
 def log_path() -> Path:
-    return duet_home() / "web.log"
+    return fugue_home() / "web.log"
 
 
 def target() -> str:
@@ -48,22 +48,22 @@ def launchctl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["launchctl", *args], capture_output=True, text=True)
 
 
-def duet_command() -> list[str]:
-    """How to start this same duet: the `duet` launcher it was run from, or else this Python."""
+def fugue_command() -> list[str]:
+    """How to start this same fugue: the `fugue` launcher it was run from, or else this Python."""
     launcher = Path(sys.argv[0])
-    if launcher.name == "duet" and launcher.is_file():
+    if launcher.name == "fugue" and launcher.is_file():
         return [str(launcher.absolute())]
-    return [sys.executable, "-m", "duet"]
+    return [sys.executable, "-m", "fugue"]
 
 
 def environment() -> dict[str, str]:
-    """What the service takes from the shell that installs it: PATH, the language, and duet's own settings."""
+    """What the service takes from the shell that installs it: PATH, the language, and fugue's own settings."""
     folders = [folder for folder in os.environ.get("PATH", "").split(os.pathsep) if folder]
     # launchd starts programs with almost no environment; the agents need HOME and a UTF-8 language.
     env = {"PATH": os.pathsep.join(dict.fromkeys(folders)), "HOME": str(Path.home()), "LANG": "en_US.UTF-8",
            "PYTHONUNBUFFERED": "1"}
     for name, value in os.environ.items():
-        if name in ("LANG", "LC_ALL") or name.startswith("DUET_"):
+        if name in ("LANG", "LC_ALL") or name.startswith("FUGUE_"):
             env[name] = value
     return env
 
@@ -71,14 +71,14 @@ def environment() -> dict[str, str]:
 def build_plist(port: int) -> dict:
     return {
         "Label": LABEL,
-        "ProgramArguments": [*duet_command(), "web", "--no-open", "--port", str(port)],
+        "ProgramArguments": [*fugue_command(), "web", "--no-open", "--port", str(port)],
         "EnvironmentVariables": environment(),
         "WorkingDirectory": str(Path.home()),  # the default folder for new discussions
         "RunAtLoad": True,
         "KeepAlive": True,
         # Without this, launchd throttles the CPU and disk use of the agents it runs.
         "ProcessType": "Interactive",
-        # Room to stop the running agents cleanly before launchd kills duet.
+        # Room to stop the running agents cleanly before launchd kills fugue.
         "ExitTimeOut": 30,
         "StandardOutPath": str(log_path()),
         "StandardErrorPath": str(log_path()),
@@ -119,7 +119,7 @@ def page_answers(port: int) -> bool:
     try:
         connection.request("GET", "/")
         response = connection.getresponse()
-        response.read()  # closing with the page unread resets the connection, which duet logs as an error
+        response.read()  # closing with the page unread resets the connection, which fugue logs as an error
         return response.status == 200
     except OSError:
         return False
@@ -150,7 +150,7 @@ def protected_folder(path: Path) -> str | None:
 
 def require_macos() -> None:
     if sys.platform != "darwin":
-        raise DuetError("The background service uses launchd, so it only works on macOS.")
+        raise FugueError("The background service uses launchd, so it only works on macOS.")
 
 
 def say(message: str = "") -> None:
@@ -173,12 +173,12 @@ def install(port: int) -> int:
         launchctl("bootout", target())
         wait_until(lambda: job() is None and not port_in_use(port), 35)
     if port_in_use(port):
-        raise DuetError(f"Something is already using port {port}, probably `duet web` running in a terminal. "
+        raise FugueError(f"Something is already using port {port}, probably `fugue web` running in a terminal. "
                         "Stop it (Ctrl-C) and run this again, or choose another port with --port.")
     for agent in AGENTS:
         try:
             find_binary(agent)
-        except DuetError as exc:
+        except FugueError as exc:
             say(f"Warning: {exc} The service uses the PATH of this shell.")
     path = plist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,21 +188,21 @@ def install(port: int) -> int:
     result = launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
     if result.returncode != 0:
         path.unlink(missing_ok=True)
-        raise DuetError(f"launchctl could not start it: {(result.stderr or result.stdout).strip()}")
+        raise FugueError(f"launchctl could not start it: {(result.stderr or result.stdout).strip()}")
 
     url = f"http://127.0.0.1:{port}/"
     say(f"Installed {path}")
     say(f"Waiting for {url} to answer...")
     folder = protected_folder(Path(__file__))
     if folder:
-        say(f"duet's code is in your {folder} folder, so macOS may ask whether {python_binary().name} "
+        say(f"fugue's code is in your {folder} folder, so macOS may ask whether {python_binary().name} "
             "may access it. Click Allow.")
     if wait_until(lambda: page_answers(port), START_TIMEOUT_S):
-        say(f"duet is running in the background at {url} and starts again when you log in.")
+        say(f"fugue is running in the background at {url} and starts again when you log in.")
         say(f"Log: {log_path()}")
         return 0
     say(f"It is installed, but the page doesn't answer yet. {access_help()}")
-    say(f"Log: {log_path()}. Check again with `duet service status`.")
+    say(f"Log: {log_path()}. Check again with `fugue service status`.")
     return 1
 
 
@@ -216,19 +216,19 @@ def uninstall() -> int:
     if loaded:
         result = launchctl("bootout", target())
         if result.returncode != 0 and job() is not None:
-            raise DuetError(f"launchctl could not stop it: {(result.stderr or result.stdout).strip()}")
+            raise FugueError(f"launchctl could not stop it: {(result.stderr or result.stdout).strip()}")
     path.unlink(missing_ok=True)
     say("Removed the background service. Discussions that were running in it have stopped; "
-        "continue them later from the page or with `duet continue`.")
+        "continue them later from the page or with `fugue continue`.")
     return 0
 
 
 def restart() -> int:
-    """Stop duet cleanly; launchd starts it again because of KeepAlive."""
+    """Stop fugue cleanly; launchd starts it again because of KeepAlive."""
     require_macos()
     info = job()
     if info is None:
-        raise DuetError("The background service isn't running. `duet service install` starts it.")
+        raise FugueError("The background service isn't running. `fugue service install` starts it.")
     port = installed_port()
     if info.get("state") == "running":
         launchctl("kill", str(int(signal.SIGTERM)), target())
@@ -248,13 +248,13 @@ def status() -> int:
     path = plist_path()
     info = job()
     if info is None and not path.exists():
-        say("The background service isn't installed. `duet service install` sets it up.")
+        say("The background service isn't installed. `fugue service install` sets it up.")
         return 1
     port = installed_port()
     url = f"http://127.0.0.1:{port}/" if port else "the page (port unknown)"
     print(f"Service:  {path if path.exists() else 'loaded, but its file is gone'}")
     if info is None:
-        print("Process:  not loaded; it starts at the next login, or now with `duet service install`")
+        print("Process:  not loaded; it starts at the next login, or now with `fugue service install`")
     elif info.get("state") == "running":
         print(f"Process:  running (pid {info.get('pid', '?')})")
     else:

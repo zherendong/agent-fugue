@@ -1,8 +1,9 @@
-"""Tests of duet's engine and command line against fake `claude` and `codex` commands (see tests/fakes)."""
+"""Tests of fugue's engine and command line against fake `claude` and `codex` commands (see tests/fakes)."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -10,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from duet import cli, engine
-from duet.engine import parse_objections, plan
-from duet.store import DEFAULT_CONTROL, Discussion, list_discussions
-from duet.transcript import demote_headings
+from fugue import cli, engine
+from fugue.engine import parse_objections, plan
+from fugue.store import DEFAULT_CONTROL, Discussion, list_discussions
+from fugue.transcript import demote_headings
 
 FAKES = Path(__file__).parent / "fakes"
 
@@ -25,10 +26,10 @@ def env(tmp_path, monkeypatch):
     logs = tmp_path / "logs"
     logs.mkdir()
     monkeypatch.chdir(work)
-    monkeypatch.setenv("DUET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("DUET_CONFIG", str(tmp_path / "no-config.toml"))
-    monkeypatch.setenv("DUET_CLAUDE_BIN", str(FAKES / "claude"))
-    monkeypatch.setenv("DUET_CODEX_BIN", str(FAKES / "codex"))
+    monkeypatch.setenv("FUGUE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FUGUE_CONFIG", str(tmp_path / "no-config.toml"))
+    monkeypatch.setenv("FUGUE_CLAUDE_BIN", str(FAKES / "claude"))
+    monkeypatch.setenv("FUGUE_CODEX_BIN", str(FAKES / "codex"))
     monkeypatch.setenv("FAKE_LOG_DIR", str(logs))
     # A home folder of its own, so the user's real Claude and Codex settings don't leak in.
     home = tmp_path / "user"
@@ -43,7 +44,8 @@ def env(tmp_path, monkeypatch):
     (home / ".claude" / "settings.json").write_text('{"model": "opus"}')
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("CODEX_HOME", raising=False)
-    return {"work": work, "logs": logs}
+    monkeypatch.setenv("FUGUE_TRASH", str(tmp_path / "trash"))  # never the real Trash
+    return {"work": work, "logs": logs, "trash": tmp_path / "trash", "config": tmp_path / "no-config.toml"}
 
 
 def calls(env) -> list[dict]:
@@ -67,17 +69,17 @@ def to(agent: str, batch: list[dict]) -> dict:
     return next(c for c in batch if c["agent"] == agent)
 
 
-def duet(*args: str) -> int:
+def fugue(*args: str) -> int:
     return cli.main(list(args))
 
 
 def without_forwarded(prompt: str) -> str:
-    """duet's own words in a prompt, without the other member's forwarded replies."""
+    """fugue's own words in a prompt, without the other member's forwarded replies."""
     return re.sub(r"<(answer|comments|message) [^>]*>[\s\S]*?</\1>", "", prompt)
 
 
 def test_it_pauses_after_every_round_by_default(env):
-    assert duet("start", "Should we cache embeddings?", "-q") == 0
+    assert fugue("start", "Should we cache embeddings?", "-q") == 0
     discussion = latest()
     assert kinds(discussion) == ["answer"]
     status = engine.describe(discussion)
@@ -85,17 +87,17 @@ def test_it_pauses_after_every_round_by_default(env):
     for call in calls(env):
         assert call["prompt"].strip() == "Should we cache embeddings?"
         assert Path(call["cwd"]).resolve() == env["work"].resolve()
-    assert duet("continue", "-q") == 0
+    assert fugue("continue", "-q") == 0
     assert kinds(latest()) == ["answer", "comment"]
     assert engine.describe(latest())["next"] == "each updates their answer"
-    assert duet("continue", "-q") == 0
+    assert fugue("continue", "-q") == 0
     assert kinds(latest()) == ["answer", "comment", "update"]
     # Nothing is written into the project folder.
     assert list(env["work"].iterdir()) == []
 
 
 def test_without_pausing_it_runs_to_the_round_limit(env):
-    assert duet("start", "Q?", "--no-pause", "-q") == 0
+    assert fugue("start", "Q?", "--no-pause", "-q") == 0
     discussion = latest()
     # Every comment round has objections, so it runs the default 2 rounds of comments and updates.
     assert kinds(discussion) == ["answer", "comment", "update", "comment", "update"]
@@ -110,18 +112,18 @@ def test_without_pausing_it_runs_to_the_round_limit(env):
 
 def test_it_stops_once_neither_member_has_objections(env, monkeypatch):
     monkeypatch.setenv("FAKE_OBJECTIONS", "0")
-    assert duet("start", "Q?", "--no-pause", "-q") == 0
+    assert fugue("start", "Q?", "--no-pause", "-q") == 0
     discussion = latest()
     assert kinds(discussion) == ["answer", "comment"]
     assert engine.describe(discussion)["label"] == "Agreed in round 1"
     # One more round can still be asked for; without pausing, its update is then commented on again.
-    assert duet("next", "-q") == 0
+    assert fugue("next", "-q") == 0
     assert kinds(latest()) == ["answer", "comment", "update", "comment"]
     assert engine.describe(latest())["label"] == "Agreed in round 3"
 
 
 def test_read_only_flags_and_sessions(env):
-    duet("start", "Q?", "-n", "1", "--no-pause", "-q")
+    fugue("start", "Q?", "-n", "1", "--no-pause", "-q")
     made = calls(env)
     claude_first, codex_first = to("claude", made[:2]), to("codex", made[:2])
     assert "--resume" not in claude_first["args"]
@@ -156,7 +158,7 @@ def test_read_only_flags_and_sessions(env):
 
 
 def test_web_can_be_turned_off_for_both(env):
-    duet("start", "Q?", "-n", "0", "--no-web", "-q")
+    fugue("start", "Q?", "-n", "0", "--no-web", "-q")
     made = calls(env)
     claude, codex = to("claude", made)["args"], to("codex", made)["args"]
     assert claude[claude.index("--allowedTools") + 1] == "Bash,Read(//**)"
@@ -166,7 +168,7 @@ def test_web_can_be_turned_off_for_both(env):
 
 
 def test_each_round_forwards_the_right_message(env):
-    duet("start", "Q?", "--no-pause", "-q")
+    fugue("start", "Q?", "--no-pause", "-q")
     made = calls(env)
     # Round 1: each comments on the other's answer, and only on that.
     comment = made[2:4]
@@ -194,14 +196,14 @@ def test_each_round_forwards_the_right_message(env):
 
 
 def test_each_member_keeps_one_letter_for_the_whole_discussion(env, monkeypatch):
-    duet("start", "Q?", "-n", "1", "--no-pause", "-q")
+    fugue("start", "Q?", "-n", "1", "--no-pause", "-q")
     letters = latest().state["labels"]
     assert sorted(letters.values()) == ["A", "B"]
     for call in calls(env)[2:]:
         me, other = letters[call["agent"]], letters["codex" if call["agent"] == "claude" else "claude"]
         assert f"You are member {me} " in call["prompt"] and f'from="member {other}"' in call["prompt"]
     # The letters are drawn at random for each new discussion, so neither tool is always "A".
-    import duet.store as store
+    import fugue.store as store
     seen = set()
     for _ in range(20):
         seen.add(store.assign_labels()["claude"])
@@ -213,30 +215,30 @@ def test_each_member_keeps_one_letter_for_the_whole_discussion(env, monkeypatch)
 
 
 def test_members_never_see_each_others_names(env):
-    duet("start", "Q?", "--no-pause", "-q")
-    duet("note", "Mind the latency.", "--to", "both")
-    duet("ask", "And what about cost?", "-q")
+    fugue("start", "Q?", "--no-pause", "-q")
+    fugue("note", "Mind the latency.", "--to", "both")
+    fugue("ask", "And what about cost?", "-q")
     for call in calls(env):
         own_words = without_forwarded(call["prompt"])
         assert "Claude" not in own_words and "Codex" not in own_words, own_words
 
 
 def test_notes_reach_only_their_recipient(env):
-    duet("start", "Q?", "-q")
-    assert duet("note", "Please consider latency on mobile.", "--to", "codex") == 0
-    assert duet("continue", "-q") == 0
+    fugue("start", "Q?", "-q")
+    assert fugue("note", "Please consider latency on mobile.", "--to", "codex") == 0
+    assert fugue("continue", "-q") == 0
     comment = calls(env)[2:]
     assert "latency on mobile" in to("codex", comment)["prompt"]
     assert "sent only to you" in to("codex", comment)["prompt"]
     assert "latency on mobile" not in to("claude", comment)["prompt"]
-    duet("continue", "-q")
+    fugue("continue", "-q")
     assert all("latency on mobile" not in c["prompt"] for c in calls(env)[4:])
     assert "latency on mobile" in latest().transcript_path.read_text()
 
 
 def test_failed_agent_stops_the_discussion_and_is_retried_alone(env, monkeypatch):
     monkeypatch.setenv("FAKE_CODEX_FAIL", "1")
-    assert duet("start", "Q?", "-q") == 1
+    assert fugue("start", "Q?", "-q") == 1
     discussion = latest()
     assert discussion.rounds[0]["entries"]["claude"]["status"] == "done"
     assert discussion.rounds[0]["entries"]["codex"]["status"] == "failed"
@@ -247,7 +249,7 @@ def test_failed_agent_stops_the_discussion_and_is_retried_alone(env, monkeypatch
 
     monkeypatch.delenv("FAKE_CODEX_FAIL")
     before = len(calls(env))
-    assert duet("continue", "-q") == 0
+    assert fugue("continue", "-q") == 0
     retried = calls(env)[before:]
     assert [c["agent"] for c in retried] == ["codex"]
     assert retried[0]["prompt"].strip() == "Q?"
@@ -256,9 +258,9 @@ def test_failed_agent_stops_the_discussion_and_is_retried_alone(env, monkeypatch
 
 
 def test_follow_up_question_is_answered_separately_then_commented_on(env):
-    duet("start", "Q?", "-n", "1", "--no-pause", "-q")
+    fugue("start", "Q?", "-n", "1", "--no-pause", "-q")
     assert kinds(latest()) == ["answer", "comment", "update"]
-    assert duet("ask", "And what about cost?", "-q") == 0
+    assert fugue("ask", "And what about cost?", "-q") == 0
     assert kinds(latest()) == ["answer", "comment", "update", "answer", "comment", "update"]
     prompt = to("claude", calls(env)[6:8])["prompt"]
     assert "follow-up question" in prompt and "And what about cost?" in prompt
@@ -267,7 +269,7 @@ def test_follow_up_question_is_answered_separately_then_commented_on(env):
 
 
 def test_live_events(env):
-    duet("start", "Q?", "-n", "1", "--no-pause", "-q")
+    fugue("start", "Q?", "-n", "1", "--no-pause", "-q")
     log = events(latest())
     assert [e["seq"] for e in log] == list(range(1, len(log) + 1))
     texts = {(e["agent"], e["text"]) for e in log if e["type"] == "activity"}
@@ -286,7 +288,7 @@ def test_live_events(env):
 
 def test_stop_mid_round(env, monkeypatch):
     monkeypatch.setenv("FAKE_SLEEP", "20")
-    from duet.config import new_discussion
+    from fugue.config import new_discussion
 
     discussion = new_discussion("Q?", cwd=env["work"])
     runner = engine.Runner(discussion.id)
@@ -340,34 +342,34 @@ def test_plan():
 
 
 def test_status_show_and_list(env, capsys):
-    duet("start", "Q?", "-q")
-    duet("continue", "-q")
+    fugue("start", "Q?", "-q")
+    fugue("continue", "-q")
     capsys.readouterr()
-    assert duet("status") == 0
+    assert fugue("status") == 0
     out = capsys.readouterr().out
     assert "claude --resume" in out and "codex resume" in out
     assert "1 objection" in out and "Paused after round 1" in out
     assert "Next:       each updates their answer" in out
-    assert duet("show", "0", "--agent", "codex") == 0
+    assert fugue("show", "0", "--agent", "codex") == 0
     out = capsys.readouterr().out
     assert "Codex reply number 1." in out and "Claude reply" not in out
-    assert duet("show", "1", "--prompt") == 0
-    assert "exactly what duet sent" in capsys.readouterr().out
-    assert duet("list") == 0
+    assert fugue("show", "1", "--prompt") == 0
+    assert "exactly what fugue sent" in capsys.readouterr().out
+    assert fugue("list") == 0
     assert latest().id in capsys.readouterr().out
 
 
 def test_bash_is_not_allowed_outright_when_commands_skip_the_sandbox(env):
     settings = Path.home() / ".claude" / "settings.json"
     settings.write_text('{"model": "opus", "sandbox": {"excludedCommands": ["docker"]}}')
-    duet("start", "Q?", "-n", "0", "-q")
+    fugue("start", "Q?", "-n", "0", "-q")
     args = to("claude", calls(env))["args"]
     assert args[args.index("--allowedTools") + 1] == "Read(//**),WebSearch,WebFetch"  # no Bash
     assert json.loads(args[args.index("--settings") + 1])["sandbox"]["enabled"]
 
 
 def test_models_lists_both_agents(env, capsys):
-    assert duet("models") == 0
+    assert fugue("models") == 0
     out = capsys.readouterr().out
     assert "gpt-test-big" in out and "low medium high ultra  (default low)" in out
     assert "gpt-hidden" not in out
@@ -377,7 +379,7 @@ def test_models_lists_both_agents(env, capsys):
 
 
 def test_chosen_models_and_efforts_reach_the_agents(env):
-    assert duet("start", "Q?", "-n", "0", "-q",
+    assert fugue("start", "Q?", "-n", "0", "-q",
                 "--claude-model", "claude-opus-5-5", "--claude-effort", "xhigh",
                 "--codex-model", "gpt-test-big", "--codex-effort", "ultra") == 0
     made = calls(env)
@@ -391,12 +393,62 @@ def test_chosen_models_and_efforts_reach_the_agents(env):
 
 
 def test_an_effort_the_model_does_not_take_is_refused(env, capsys):
-    assert duet("start", "Q?", "-q", "--codex-model", "gpt-test-small", "--codex-effort", "ultra") == 1
+    assert fugue("start", "Q?", "-q", "--codex-model", "gpt-test-small", "--codex-effort", "ultra") == 1
     assert "GPT-Test-Small doesn't take effort 'ultra'; it takes low, medium." in capsys.readouterr().err
     # Without a model, the effort is checked against the tool's default model (opus here).
-    assert duet("start", "Q?", "-q", "--claude-effort", "ultra") == 1
+    assert fugue("start", "Q?", "-q", "--claude-effort", "ultra") == 1
     assert "Claude Opus 5.5 doesn't take effort 'ultra'" in capsys.readouterr().err
     assert list_discussions() == [] and calls(env) == []
+
+
+def test_delete_moves_a_discussion_to_the_trash(env, capsys):
+    fugue("start", "Q?", "-n", "0", "-q")
+    discussion = latest()
+    # Not while it runs.
+    discussion.state["runner"] = {"pid": os.getpid(), "started_at": "now"}
+    discussion.save()
+    assert fugue("delete", discussion.id, "--yes") == 1
+    assert "running" in capsys.readouterr().err
+    discussion.state.pop("runner")
+    discussion.save()
+    assert fugue("delete", discussion.id[:8], "--yes") == 0
+    assert list_discussions() == []
+    assert (env["trash"] / discussion.id / "state.json").exists()
+
+
+def test_settings_are_saved_to_the_config_file_and_used(env):
+    from fugue.settings import read_defaults, save_defaults
+
+    defaults = read_defaults()
+    assert defaults["max_rounds"] == 2 and defaults["web"] is True and defaults["claude"]["model"] == ""
+    saved = save_defaults({
+        "max_rounds": 4, "pause_after_each_round": False, "web": False, "timeout_minutes": 45,
+        "claude": {"model": "claude-sonnet-5-5", "effort": "high", "args": "--add-dir '../a b'"},
+        "codex": {"model": "", "effort": "", "args": ""},
+    })
+    assert saved["max_rounds"] == 4 and saved["claude"]["args"] == "--add-dir '../a b'"
+    import tomllib
+    config = tomllib.loads(env["config"].read_text())
+    assert config["claude"] == {"model": "claude-sonnet-5-5", "effort": "high", "args": ["--add-dir", "../a b"]}
+    assert "codex" not in config and config["web"] is False
+    fugue("start", "Q?", "-q")
+    discussion = latest()
+    assert discussion.read_control()["max_rounds"] == 4 and not discussion.read_control()["pause_after_each_round"]
+    assert discussion.state["settings"]["claude"]["effort"] == "high" and discussion.state["settings"]["web"] is False
+    with pytest.raises(Exception, match="doesn't take effort"):
+        save_defaults({**saved, "codex": {"model": "gpt-test-small", "effort": "ultra", "args": ""}})
+
+
+def test_status_reports_both_agents_without_calling_a_model(env):
+    from fugue.settings import status
+
+    report = status(8765)
+    assert report["agents"]["claude"]["version"] == "9.9.9 (Fake Claude)"
+    assert report["agents"]["claude"]["logged_in"] and report["agents"]["codex"]["logged_in"]
+    assert report["codex_switched_off"]["plugins"] == ["chrome@openai-bundled"]
+    assert report["codex_switched_off"]["mcp_servers"] == ["node_repl"]
+    assert report["storage"]["discussions"] == 0
+    assert calls(env) == []  # no agent was asked anything
 
 
 def test_parse_objections():

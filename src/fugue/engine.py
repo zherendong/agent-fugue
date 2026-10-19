@@ -11,7 +11,7 @@ from typing import Callable
 from . import transcript
 from .agents import AgentCall, claude_command, codex_command, find_binary
 from .prompts import NAMES, build_prompt
-from .store import AGENTS, Discussion, DuetError, now_iso, other_agent
+from .store import AGENTS, Discussion, FugueError, now_iso, other_agent
 from .streams import ClaudeStream, CodexStream, Outcome
 
 # -- what each round contains
@@ -23,7 +23,7 @@ def is_complete(rnd: dict) -> bool:
 
 # What follows each kind of round: after the answers, comments and updates
 # alternate. The kinds "review", "discuss" and "final" come from discussions
-# made by earlier versions of duet.
+# made by earlier versions of fugue.
 NEXT_KIND = {"answer": "comment", "comment": "update", "update": "comment",
              "review": "update", "discuss": "update", "final": "comment"}
 
@@ -65,7 +65,7 @@ def agreed(rnd: dict) -> bool:
 def create_round(discussion: Discussion, kind: str, participants: list[str], question: str | None = None) -> dict:
     """Add a round, writing the exact message each participant will receive."""
     if discussion.rounds and not is_complete(discussion.rounds[-1]):
-        raise DuetError("The last round hasn't finished. Continue the discussion to retry it first.")
+        raise FugueError("The last round hasn't finished. Continue the discussion to retry it first.")
     index = len(discussion.rounds)
     followup = kind == "answer" and index > 0
     rnd: dict = {"index": index, "kind": kind, "created_at": now_iso(), "entries": {}}
@@ -80,7 +80,7 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
             continue  # nothing new from the other member to work with
         planned[agent] = forwarded
     if not planned:
-        raise DuetError("Neither member has anything new from the other to work with.")
+        raise FugueError("Neither member has anything new from the other to work with.")
 
     for agent, forwarded in planned.items():
         sender = other_agent(agent)
@@ -102,7 +102,7 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
 COUNT_PATTERNS = [
     re.compile(r"objections?\s*[:：]\s*\**\s*(\d+|none|zero)", re.IGNORECASE),
     re.compile(r"异议\s*[:：]\s*\**\s*(\d+|无)"),
-    # The line asked for by earlier versions of duet.
+    # The line asked for by earlier versions of fugue.
     re.compile(r"remaining\s+disagreements?\s*[:：]\s*\**\s*(\d+|none|zero)", re.IGNORECASE),
 ]
 
@@ -125,7 +125,7 @@ def _make_call(discussion: Discussion, rnd: dict, agent: str) -> AgentCall:
     stem = discussion.path / "logs" / f"{rnd['index']:02d}-{agent}"
     if agent == "claude":
         cmd = claude_command(find_binary("claude"), session_id=session_id, model=agent_settings.get("model"),
-                             extra_args=agent_settings.get("args", []), name=f"duet: {discussion.title}",
+                             extra_args=agent_settings.get("args", []), name=f"fugue: {discussion.title}",
                              cwd=discussion.cwd, effort=agent_settings.get("effort"),
                              web=settings.get("web", True))
         stream = ClaudeStream(discussion.cwd)
@@ -168,7 +168,7 @@ def run_round(discussion: Discussion, rnd: dict, *, should_stop: Callable[[], bo
     if not todo:
         return
     if not discussion.cwd.is_dir():
-        raise DuetError(f"The folder this discussion runs in no longer exists: {discussion.cwd}")
+        raise FugueError(f"The folder this discussion runs in no longer exists: {discussion.cwd}")
     index = rnd["index"]
     calls = [_make_call(discussion, rnd, agent) for agent in todo]
     for call in calls:
@@ -260,7 +260,7 @@ def automatic_step(rounds: list[dict], control: dict) -> dict | None:
         return None
     current = current_question(rounds)
     if any(rnd["kind"] == "final" for rnd in current):
-        return None  # discussions made by earlier versions of duet ended with final answers
+        return None  # discussions made by earlier versions of fugue ended with final answers
     updates = sum(1 for rnd in current if rnd["kind"] == "update")
     if last["kind"] != "comment" and updates >= control["max_rounds"]:
         return None
@@ -411,7 +411,7 @@ class Runner:
                     discussion.pop_request(step["request"]["id"])
                 try:
                     rnd = self._execute(discussion, step)
-                except DuetError as exc:
+                except FugueError as exc:
                     discussion.emit({"type": "notice", "level": "error", "text": str(exc)})
                     break
                 finally:
@@ -446,6 +446,6 @@ class Runner:
         elif action == "next":
             rnd = create_round(discussion, next_kind(discussion), list(AGENTS))
         else:
-            raise DuetError(f"duet no longer handles the request {action!r}; it was dropped.")
+            raise FugueError(f"fugue no longer handles the request {action!r}; it was dropped.")
         run_round(discussion, rnd, should_stop=self._should_stop(discussion))
         return rnd

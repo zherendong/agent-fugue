@@ -1,11 +1,11 @@
 """The models each agent can run, and the effort levels each model accepts.
 
 Codex reports its own models (`codex debug models`), so its list stays current
-by itself; duet keeps a copy for a day. Claude Code has no such command, so
-duet carries a short list of the current Claude models. Their effort levels
+by itself; fugue keeps a copy for a day. Claude Code has no such command, so
+fugue carries a short list of the current Claude models. Their effort levels
 match Anthropic's documentation.
 
-"Default" always means duet passes nothing, so each tool uses what its own
+"Default" always means fugue passes nothing, so each tool uses what its own
 settings say (~/.claude/settings.json, ~/.codex/config.toml).
 """
 
@@ -19,7 +19,7 @@ import tomllib
 from pathlib import Path
 
 from .agents import codex_home, find_binary
-from .store import DuetError, duet_home
+from .store import FugueError, fugue_home
 
 CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 CLAUDE_MODELS = [
@@ -46,7 +46,7 @@ CACHE_SECONDS = 24 * 3600
 
 
 def _cache_path() -> Path:
-    return duet_home() / "codex-models.json"
+    return fugue_home() / "codex-models.json"
 
 
 def _normalize_codex(raw: dict) -> list[dict]:
@@ -71,7 +71,7 @@ def _normalize_codex(raw: dict) -> list[dict]:
 
 
 def codex_models(refresh: bool = False) -> dict:
-    """Codex's models: from duet's copy if it is less than a day old, else from Codex itself."""
+    """Codex's models: from fugue's copy if it is less than a day old, else from Codex itself."""
     cache = _cache_path()
     if not refresh and cache.exists():
         try:
@@ -85,7 +85,7 @@ def codex_models(refresh: bool = False) -> dict:
                                 encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
         models = _normalize_codex(json.loads(result.stdout)) if result.returncode == 0 else []
         source = "codex debug models"
-    except (DuetError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+    except (FugueError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         models = []
     if not models:
         try:  # the copy Codex keeps for itself
@@ -94,7 +94,7 @@ def codex_models(refresh: bool = False) -> dict:
         except (OSError, json.JSONDecodeError):
             models = []
     if not models:
-        return {"models": CODEX_FALLBACK, "source": "duet's built-in list (Codex could not be asked)",
+        return {"models": CODEX_FALLBACK, "source": "fugue's built-in list (Codex could not be asked)",
                 "checked_at": None}
     saved = {"models": models, "source": source, "checked_at": time.time()}
     try:
@@ -106,7 +106,7 @@ def codex_models(refresh: bool = False) -> dict:
 
 
 def tool_defaults() -> dict:
-    """What each tool runs when duet passes no model or effort: the user's own settings."""
+    """What each tool runs when fugue passes no model or effort: the user's own settings."""
     claude = {"model": None, "effort": None}
     try:
         settings = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8"))
@@ -130,7 +130,7 @@ def catalog(refresh: bool = False) -> dict:
     codex = codex_models(refresh)
     defaults = tool_defaults()
     return {
-        "claude": {"models": CLAUDE_MODELS, "source": "duet's built-in list of current Claude models",
+        "claude": {"models": CLAUDE_MODELS, "source": "fugue's built-in list of current Claude models",
                    "checked_at": None, "defaults": defaults["claude"]},
         "codex": {**codex, "defaults": defaults["codex"]},
     }
@@ -155,4 +155,4 @@ def check_effort(agent: str, model: str | None, effort: str | None, entry: dict)
     allowed = known["efforts"] if known else sorted({level for m in models for level in m["efforts"]})
     if effort not in allowed:
         who = known["name"] if known else ("Claude" if agent == "claude" else "Codex")
-        raise DuetError(f"{who} doesn't take effort {effort!r}; it takes {', '.join(allowed)}.")
+        raise FugueError(f"{who} doesn't take effort {effort!r}; it takes {', '.join(allowed)}.")

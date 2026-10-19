@@ -11,6 +11,12 @@ def out(obj):
     print(json.dumps(obj), flush=True)
 
 args = sys.argv[1:]
+if args == ["--version"]:
+    print("codex-cli 9.9.9")
+    sys.exit(0)
+if args[:2] == ["login", "status"]:
+    print("Logged in using a fake account")
+    sys.exit(0)
 if args[:2] == ["debug", "models"]:  # Codex's model catalog, in the shape the real tool prints
     levels = lambda *names: [{"effort": n, "description": n} for n in names]
     print(json.dumps({"models": [

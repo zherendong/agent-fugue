@@ -12,6 +12,12 @@ def out(obj):
     print(json.dumps(obj), flush=True)
 
 args = sys.argv[1:]
+if args == ["--version"]:
+    print("9.9.9 (Fake Claude)")
+    sys.exit(0)
+if args[:2] == ["auth", "status"]:
+    print(json.dumps({"loggedIn": True, "authMethod": "fake"}))
+    sys.exit(0)
 prompt = sys.stdin.read()
 session = args[args.index("--resume") + 1] if "--resume" in args else str(uuid.uuid4())
 log = os.path.join(os.environ["FAKE_LOG_DIR"], "calls.jsonl")

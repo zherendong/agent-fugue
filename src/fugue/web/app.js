@@ -1,9 +1,9 @@
 'use strict';
 
-// The duet page: a list of discussions on the left, the selected discussion on
+// The fugue page: a list of discussions on the left, the selected discussion on
 // the right, updated live from the server's event stream.
 
-const TOKEN = document.querySelector('meta[name="duet-token"]').content;
+const TOKEN = document.querySelector('meta[name="fugue-token"]').content;
 const NAMES = { claude: 'Claude', codex: 'Codex' };
 const AGENTS = ['claude', 'codex'];
 
@@ -52,7 +52,7 @@ function el(tag, props, ...children) {
 async function api(method, path, body) {
   const response = await fetch(path, {
     method,
-    headers: { 'X-Duet-Token': TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'X-Fugue-Token': TOKEN, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
@@ -128,8 +128,8 @@ function copy(text) {
 
 function prefs(update) {
   try {
-    const saved = JSON.parse(localStorage.getItem('duet-new-question') || '{}');
-    if (update) localStorage.setItem('duet-new-question', JSON.stringify({ ...saved, ...update }));
+    const saved = JSON.parse(localStorage.getItem('fugue-new-question') || '{}');
+    if (update) localStorage.setItem('fugue-new-question', JSON.stringify({ ...saved, ...update }));
     return saved;
   } catch {
     return {};
@@ -323,7 +323,7 @@ async function refreshList() {
   if (current && S.detail && (current.updated_at !== S.detail.updated_at
       || current.status.label !== S.detail.status.label)) refreshSoon();
   const waiting = list.filter((d) => d.status.needs_you).length;
-  document.title = waiting ? `(${waiting}) duet` : 'duet';
+  document.title = waiting ? `(${waiting}) fugue` : 'fugue';
 }
 
 function drawList() {
@@ -369,6 +369,7 @@ function setUpNotifications() {
 function route() {
   const m = location.hash.match(/^#\/d\/([A-Za-z0-9._-]+)/);
   if (m) openDiscussion(m[1]);
+  else if (location.hash === '#/settings') showSettings();
   else if (location.hash === '#/new' || !S.list.length) showNewQuestion();
   else location.hash = `#/d/${S.list[0].id}`;
 }
@@ -532,6 +533,13 @@ function header(d) {
       el('span', {}, `started ${ago(d.created_at)}`),
       el('span', {}, d.id),
       el('button', { class: 'link', onclick: () => copy(d.transcript_path) }, 'Copy transcript path'),
+      el('button', {
+        class: 'link danger-link',
+        type: 'button',
+        disabled: d.status.phase === 'running',
+        title: d.status.phase === 'running' ? 'Stop it first' : 'Move this discussion to the Trash',
+        onclick: () => deleteDiscussion(d),
+      }, 'Delete'),
       resumeLinks(d)),
     el('div', { class: 'status-row' },
       el('span', { class: `status phase-${status.phase}` }, el('span', { class: 'dot' }), label),
@@ -545,6 +553,17 @@ function runsWith(d, agent) {
   const model = chosen.model ? modelName(agent, chosen.model) : 'default model';
   const letter = d.labels && d.labels[agent] ? ` (member ${d.labels[agent]})` : '';
   return `${NAMES[agent]}${letter}: ${model}, ${chosen.effort ? `effort ${chosen.effort}` : 'default effort'}`;
+}
+
+async function deleteDiscussion(d) {
+  const sure = window.confirm(`Move "${d.title}" to the Trash?\n\nYou can restore it from the Trash in Finder. `
+    + "Claude's and Codex's own sessions are kept.");
+  if (!sure) return;
+  if (!(await attempt(() => api('DELETE', path())))) return;
+  toast('Moved to the Trash.');
+  leaveDiscussion();
+  await refreshList();
+  location.hash = S.list.length ? `#/d/${S.list[0].id}` : '#/new';
 }
 
 function resumeLinks(d) {
@@ -635,7 +654,7 @@ const ROUND_TITLES = {
   answer: 'Independent answers',
   comment: "Each comments on the other's answer",
   update: 'Each updates their answer',
-  // Kinds from discussions made by earlier versions of duet.
+  // Kinds from discussions made by earlier versions of fugue.
   review: "Each reviews the other's answer",
   discuss: 'Discussion',
   final: 'Final answer',
@@ -686,7 +705,7 @@ function countBadge(e) {
     return el('span', { class: `badge${e.objections === 0 ? ' ok' : ''}` },
       e.objections === 0 ? 'No objections' : plural(e.objections, 'objection'));
   }
-  if (e.remaining != null) { // from earlier versions of duet
+  if (e.remaining != null) { // from earlier versions of fugue
     return el('span', { class: `badge${e.remaining === 0 ? ' ok' : ''}` },
       e.remaining === 0 ? 'No disagreements left' : `${plural(e.remaining, 'disagreement')} left`);
   }
@@ -736,7 +755,7 @@ function card(r, agent) {
   el('footer', {},
     countBadge(e),
     el('span', { class: 'spacer' }),
-    el('button', { class: 'link', type: 'button', onclick: () => showPrompt(r.index, agent) }, 'What duet sent'),
+    el('button', { class: 'link', type: 'button', onclick: () => showPrompt(r.index, agent) }, 'What fugue sent'),
     e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy reply') : null));
 }
 
@@ -794,7 +813,7 @@ function tick() {
 async function showPrompt(round, agent) {
   const data = await attempt(() => api('GET', `${path('prompt')}?round=${round}&agent=${agent}`));
   if (!data) return;
-  $('#prompt-title').textContent = `What duet sent to ${NAMES[agent]} in round ${round}`;
+  $('#prompt-title').textContent = `What fugue sent to ${NAMES[agent]} in round ${round}`;
   $('#prompt-text').textContent = data.text;
   $('#prompt-copy').onclick = () => copy(data.text);
   $('#prompt-dialog').showModal();
@@ -864,7 +883,7 @@ function drawPending(d) {
 
 // ---------------------------------------------------------------- model pickers
 // Codex's models come from `codex debug models` through the server; Claude's
-// list is built into duet. "Default" means duet passes nothing, so each tool
+// list is built into fugue. "Default" means fugue passes nothing, so each tool
 // uses its own settings.
 
 const EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -892,12 +911,14 @@ function modelName(agent, id) {
   return suffix ? `${model.name} ${suffix[0]}` : model.name;
 }
 
-function defaultModelLabel(agent) {
+function defaultModelLabel(agent, savedDefault) {
+  if (savedDefault && savedDefault.model) return `Default: ${modelName(agent, savedDefault.model)}`;
   const own = S.models && S.models[agent].defaults.model;
   return own ? `Default: ${modelName(agent, own)}` : `Default: ${NAMES[agent]}'s own choice`;
 }
 
-function defaultEffortLabel(agent, modelId) {
+function defaultEffortLabel(agent, modelId, savedDefault) {
+  if (savedDefault && savedDefault.effort) return `Default: ${savedDefault.effort}`;
   const entry = S.models && S.models[agent];
   const own = entry && entry.defaults.effort;
   if (agent === 'codex') {
@@ -913,13 +934,15 @@ function allLevels(models) {
   return EFFORT_ORDER.filter((level) => levels.has(level));
 }
 
-function modelPicker(agent, chosen) {
+// `savedDefault` is the user's default from Settings, which "Default" stands for on the
+// New question form; on the Settings page itself "Default" means the tool's own choice.
+function modelPicker(agent, chosen, savedDefault = null) {
   const entry = S.models[agent];
   const models = entry.models;
   const chosenModel = chosen.model || '';
   const listed = !chosenModel || models.some((m) => m.id === chosenModel);
   const modelSelect = el('select', { name: `${agent}_model_choice`, 'aria-label': `${NAMES[agent]} model` },
-    el('option', { value: '' }, defaultModelLabel(agent)),
+    el('option', { value: '' }, defaultModelLabel(agent, savedDefault)),
     models.map((m) => el('option', { value: m.id, selected: m.id === chosenModel, title: m.description || m.id }, m.name)),
     el('option', { value: '__other', selected: !listed }, 'Other model id…'));
   const other = el('input', {
@@ -934,12 +957,14 @@ function modelPicker(agent, chosen) {
   let wanted = chosen.effort || '';
   const fill = () => {
     other.hidden = modelSelect.value !== '__other';
-    const id = modelSelect.value === '__other' ? other.value : (modelSelect.value || entry.defaults.model);
+    const id = modelSelect.value === '__other'
+      ? other.value
+      : (modelSelect.value || (savedDefault && savedDefault.model) || entry.defaults.model);
     const model = findModel(agent, id);
     // Only offer the levels this model accepts; keep the choice when it still fits.
     const levels = model ? model.efforts : allLevels(models);
     effortSelect.replaceChildren(
-      el('option', { value: '' }, defaultEffortLabel(agent, id)),
+      el('option', { value: '' }, defaultEffortLabel(agent, id, savedDefault)),
       ...levels.map((level) => el('option', { value: level }, level)));
     effortSelect.value = levels.includes(wanted) ? wanted : '';
   };
@@ -967,11 +992,13 @@ function pickedModels(form) {
   return picked;
 }
 
-function modelsHint() {
+function modelsHint(onSettingsPage = false) {
   const codex = S.models.codex;
   const when = codex.checked_at ? ` on ${new Date(codex.checked_at * 1000).toLocaleString()}` : '';
-  return `Codex's list comes from ${codex.source}${when}; Claude's is built into duet. `
-    + 'Default means duet passes nothing, so each tool uses its own settings.';
+  const meaning = onSettingsPage
+    ? 'Default here means fugue passes nothing, so each tool uses its own settings.'
+    : 'Default means your defaults from Settings, or each tool\'s own settings where you set none.';
+  return `Codex's list comes from ${codex.source}${when}; Claude's is built into fugue. ${meaning}`;
 }
 
 // ---------------------------------------------------------------- new question
@@ -980,13 +1007,16 @@ async function showNewQuestion() {
   leaveDiscussion();
   $('#composer').hidden = true;
   drawList();
-  const folders = await api('GET', '/api/folders').catch(() => ({ default: '', recent: [] }));
+  const [folders, settings] = await Promise.all([
+    api('GET', '/api/folders').catch(() => ({ default: '', recent: [] })),
+    api('GET', '/api/settings').catch(() => null),
+  ]);
+  const defaults = settings ? settings.defaults : null;
   const saved = prefs();
   const missing = AGENTS.filter((a) => S.info && !S.info.agents[a]);
   const cwdDefault = saved.cwd || folders.recent[0] || folders.default;
-  // Saved under new names: the old "max_rounds" and "pause" meant review rounds and
-  // a default of not pausing, from before the council.
-  const rounds = saved.rounds_of_comments ?? 2;
+  // Everything but the folder starts from the defaults on the Settings page.
+  const rounds = defaults ? defaults.max_rounds : 2;
   const pickers = el('div', { class: 'models' }, el('span', { class: 'muted' }, 'Loading the model lists…'));
   const pickersHint = el('div', { class: 'hint' });
   const drawPickers = (chosen) => {
@@ -994,7 +1024,7 @@ async function showNewQuestion() {
       pickers.replaceChildren(el('span', { class: 'muted' }, "Couldn't load the model lists; each agent will use its default."));
       return;
     }
-    pickers.replaceChildren(...AGENTS.map((a) => modelPicker(a, chosen[a] || {})));
+    pickers.replaceChildren(...AGENTS.map((a) => modelPicker(a, chosen[a] || {}, defaults && defaults[a])));
     pickersHint.replaceChildren(modelsHint(), el('button', {
       class: 'link',
       type: 'button',
@@ -1032,9 +1062,9 @@ async function showNewQuestion() {
       el('div', { class: 'options' },
         el('label', {}, 'Rounds of comments and updates',
           el('select', { name: 'max_rounds' }, [0, 1, 2, 3, 4, 5, 6, 8, 10].map((n) => el('option', { value: n, selected: n === rounds }, n)))),
-        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: saved.pause_after_each_round ?? true }), 'Pause after each round'),
+        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: defaults ? defaults.pause_after_each_round : true }), 'Pause after each round'),
         el('label', { title: "Both or neither. Claude: web search and fetching pages (not from this Mac's own servers). Codex: its web search." },
-          el('input', { type: 'checkbox', name: 'web', checked: saved.web ?? true }), 'Members may use the web')),
+          el('input', { type: 'checkbox', name: 'web', checked: defaults ? defaults.web : true }), 'Members may use the web')),
       el('div', { class: 'hint' },
         "After the answers, each round has two steps: each comments on the other's answer, then each updates their own. "
         + 'It stops earlier once neither has objections. With pausing on, you move it on yourself after every round. '
@@ -1046,9 +1076,15 @@ async function showNewQuestion() {
     el('details', {},
       el('summary', {}, 'Extra arguments and time limit'),
       el('div', { class: 'grid' },
-        el('label', {}, 'Extra arguments for claude -p', el('input', { type: 'text', name: 'claude_args', value: saved.claude_args || '', placeholder: '--add-dir ../shared' })),
-        el('label', {}, 'Extra arguments for codex exec', el('input', { type: 'text', name: 'codex_args', value: saved.codex_args || '', placeholder: '-c web_search="disabled"' })),
-        el('label', {}, 'Give up on an agent after (minutes)', el('input', { type: 'text', name: 'timeout', value: saved.timeout || '', placeholder: '30' })))),
+        AGENTS.map((a) => el('label', {}, `More arguments for ${a === 'claude' ? 'claude -p' : 'codex exec'}`,
+          el('input', {
+            type: 'text',
+            name: `${a}_args`,
+            spellcheck: 'false',
+            placeholder: defaults && defaults[a].args ? `after your defaults: ${defaults[a].args}` : '--add-dir ../shared',
+          }))),
+        el('label', {}, 'Give up on an agent after (minutes)',
+          el('input', { type: 'text', name: 'timeout', placeholder: String(defaults ? defaults.timeout_minutes : 30) })))),
     el('div', { class: 'submit' },
       el('button', { class: 'btn primary', type: 'submit' }, 'Ask both'),
       el('span', { class: 'muted' }, '⌘↩')));
@@ -1056,10 +1092,7 @@ async function showNewQuestion() {
   $('#main').scrollTop = 0;
   $('#q').focus();
   await loadModels();
-  drawPickers({
-    claude: { model: saved.claude_model, effort: saved.claude_effort },
-    codex: { model: saved.codex_model, effort: saved.codex_effort },
-  });
+  drawPickers({});
 }
 
 async function start(form) {
@@ -1068,19 +1101,7 @@ async function start(form) {
   submit.disabled = true;
   const picked = pickedModels(form);
   const pick = (agent, key) => (picked[agent] ? picked[agent][key] : undefined);
-  prefs({
-    cwd: data.cwd,
-    rounds_of_comments: Number(data.max_rounds),
-    pause_after_each_round: data.pause === 'on',
-    web: data.web === 'on',
-    claude_model: pick('claude', 'model'),
-    claude_effort: pick('claude', 'effort'),
-    codex_model: pick('codex', 'model'),
-    codex_effort: pick('codex', 'effort'),
-    claude_args: data.claude_args,
-    codex_args: data.codex_args,
-    timeout: data.timeout,
-  });
+  prefs({ cwd: data.cwd });
   const created = await attempt(() => api('POST', '/api/discussions', {
     question: data.question,
     cwd: data.cwd,
@@ -1099,6 +1120,94 @@ async function start(form) {
   if (!created) return;
   await refreshList();
   location.hash = `#/d/${created.id}`;
+}
+
+// ---------------------------------------------------------------- settings
+
+async function showSettings() {
+  leaveDiscussion();
+  $('#composer').hidden = true;
+  drawList();
+  $('#content').replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
+  const [settings] = await Promise.all([api('GET', '/api/settings').catch((error) => ({ error: error.message })), loadModels()]);
+  if (settings.error) {
+    $('#content').replaceChildren(el('p', { class: 'muted' }, settings.error));
+    return;
+  }
+  const d = settings.defaults;
+  const pickers = el('div', { class: 'models' },
+    S.models ? AGENTS.map((a) => modelPicker(a, d[a])) : el('span', { class: 'muted' }, "Couldn't load the model lists."));
+  const statusBox = el('div', { class: 'status-box' });
+  const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, d.max_rounds])].sort((a, b) => a - b);
+  const form = el('form', { class: 'form settings', onsubmit: (e) => { e.preventDefault(); saveSettings(form); } },
+    el('h1', {}, 'Settings'),
+    el('h2', {}, 'Defaults for new discussions'),
+    el('div', { class: 'hint' }, 'The New question form and ', el('code', {}, 'fugue start'),
+      ' both start from these. They are saved to ', el('code', {}, tilde(settings.path)),
+      '; saving rewrites that file, so comments in it are not kept.'),
+    el('div', { class: 'field' },
+      el('div', { class: 'options' },
+        el('label', {}, 'Rounds of comments and updates',
+          el('select', { name: 'max_rounds' }, counts.map((n) => el('option', { value: n, selected: n === d.max_rounds }, n)))),
+        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: d.pause_after_each_round }), 'Pause after each round'),
+        el('label', {}, el('input', { type: 'checkbox', name: 'web', checked: d.web }), 'Members may use the web'),
+        el('label', {}, 'Give up on an agent after',
+          el('input', { type: 'text', name: 'timeout', value: d.timeout_minutes, class: 'short' }), 'minutes'))),
+    el('div', { class: 'field' }, el('div', { class: 'label' }, 'Models'), pickers,
+      S.models ? el('div', { class: 'hint' }, modelsHint(true)) : null),
+    el('div', { class: 'field' },
+      el('div', { class: 'grid' }, AGENTS.map((a) => el('label', {}, `Extra arguments for ${a === 'claude' ? 'claude -p' : 'codex exec'}`,
+        el('input', { type: 'text', name: `${a}_args`, value: d[a].args, spellcheck: 'false' }))))),
+    el('div', { class: 'submit' }, el('button', { class: 'btn primary', type: 'submit' }, 'Save defaults')),
+    el('h2', {}, 'Status'),
+    statusBox,
+    el('div', { class: 'submit' }, el('button', { class: 'btn small', type: 'button', onclick: () => drawStatus(statusBox) }, 'Check again')));
+  $('#content').replaceChildren(form);
+  $('#main').scrollTop = 0;
+  drawStatus(statusBox);
+}
+
+async function saveSettings(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const picked = pickedModels(form);
+  const body = {
+    max_rounds: Number(data.max_rounds),
+    pause_after_each_round: data.pause === 'on',
+    web: data.web === 'on',
+    timeout_minutes: Number(data.timeout),
+  };
+  for (const a of AGENTS) {
+    body[a] = { model: (picked[a] && picked[a].model) || '', effort: (picked[a] && picked[a].effort) || '', args: data[`${a}_args`] || '' };
+  }
+  if (await attempt(() => api('POST', '/api/settings', body))) toast('Defaults saved.');
+}
+
+async function drawStatus(box) {
+  box.replaceChildren(el('p', { class: 'muted' }, 'Checking…'));
+  const s = await api('GET', '/api/status').catch((error) => ({ error: error.message }));
+  if (s.error) {
+    box.replaceChildren(el('p', { class: 'muted' }, s.error));
+    return;
+  }
+  const dot = (state) => el('span', { class: `dot phase-${{ good: 'finished', warn: 'paused', bad: 'stopped' }[state]}` });
+  const row = (state, label, ...value) => el('div', { class: 'status-line' }, dot(state), el('span', { class: 'status-label' }, label), el('span', {}, ...value));
+  const agentRow = (a) => {
+    const x = s.agents[a];
+    if (!x.found) return row('bad', NAMES[a], x.problem);
+    return row(x.logged_in ? 'good' : 'bad', NAMES[a], `${x.version} · ${x.login} · `, el('code', {}, tilde(x.path)));
+  };
+  const off = s.codex_switched_off;
+  const short = (name) => name.split('@')[0];
+  const offList = ['the apps connector'];
+  if (off.plugins.length) offList.push(`${plural(off.plugins.length, 'plugin')} (${off.plugins.map(short).join(', ')})`);
+  if (off.mcp_servers.length) offList.push(`${off.mcp_servers.length === 1 ? 'the MCP server' : 'the MCP servers'} ${off.mcp_servers.join(', ')}`);
+  box.replaceChildren(
+    agentRow('claude'),
+    agentRow('codex'),
+    row('good', 'Codex in fugue\'s runs', `switched off, as they act outside its sandbox: ${offList.join('; ')}`),
+    row(s.service.running ? 'good' : 'warn', 'Background service', s.service.text),
+    row('good', 'Discussions', `${s.storage.discussions} in `, el('code', {}, tilde(s.storage.path)), ` (${s.storage.megabytes} MB)`),
+    row('good', 'This page', `fugue ${s.version} on port ${s.port}`));
 }
 
 // ---------------------------------------------------------------- start up

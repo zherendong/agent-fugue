@@ -479,3 +479,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
   padding: 0 7px;
   white-space: nowrap;
 }
+
+/* ---------- settings ---------- */
+
+.side-foot { display: flex; flex-direction: column; gap: 6px; }
+.form h2 { font-size: 15px; margin: 26px 0 8px; }
+.form h1 + h2 { margin-top: 0; }
+.form .hint code, .status-line code { font-size: 12px; }
+.form input.short { width: 70px; }
+.status-box { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 4px 14px; margin-bottom: 10px; }
+.status-line { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.status-line:last-child { border-bottom: none; }
+.status-line .dot { position: relative; top: -1px; }
+.status-label { font-weight: 600; min-width: 170px; flex: none; }
+button.link.danger-link { color: var(--danger); }
+button.link:disabled { opacity: .45; cursor: default; text-decoration: none; }
+.form h2 + .hint { margin: -2px 0 12px; }

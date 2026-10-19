@@ -13,7 +13,7 @@ ROUND_LABELS = {
     "answer": "independent answers",
     "comment": "each comments on the other's answer",
     "update": "each updates their answer",
-    # Kinds from discussions made by earlier versions of duet.
+    # Kinds from discussions made by earlier versions of fugue.
     "review": "each reviews the other's answer",
     "discuss": "discussion",
     "final": "final answer",

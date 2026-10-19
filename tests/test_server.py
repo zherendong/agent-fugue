@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from duet.server import make_server
+from fugue.server import make_server
 
 FAKES = Path(__file__).parent / "fakes"
 
@@ -20,12 +20,13 @@ def server(tmp_path, monkeypatch):
     work = tmp_path / "project"
     work.mkdir()
     (tmp_path / "logs").mkdir()
-    monkeypatch.setenv("DUET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("DUET_CONFIG", str(tmp_path / "no-config.toml"))
-    monkeypatch.setenv("DUET_CLAUDE_BIN", str(FAKES / "claude"))
-    monkeypatch.setenv("DUET_CODEX_BIN", str(FAKES / "codex"))
+    monkeypatch.setenv("FUGUE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FUGUE_CONFIG", str(tmp_path / "no-config.toml"))
+    monkeypatch.setenv("FUGUE_CLAUDE_BIN", str(FAKES / "claude"))
+    monkeypatch.setenv("FUGUE_CODEX_BIN", str(FAKES / "codex"))
     monkeypatch.setenv("FAKE_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.setenv("FUGUE_TRASH", str(tmp_path / "trash"))
     monkeypatch.delenv("CODEX_HOME", raising=False)
     httpd, app = make_server(0, work)
     thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
@@ -42,7 +43,7 @@ def call(server, method, path, body=None, *, token=True, headers=None):
     connection = http.client.HTTPConnection("127.0.0.1", server["port"], timeout=10)
     sent = {"Content-Type": "application/json"}
     if token:
-        sent["X-Duet-Token"] = server["app"].token
+        sent["X-Fugue-Token"] = server["app"].token
     sent.update(headers or {})
     connection.request(method, path, body=json.dumps(body) if body is not None else None, headers=sent)
     response = connection.getresponse()
@@ -70,7 +71,7 @@ def test_page_carries_the_token_and_api_needs_it(server):
     assert call(server, "GET", "/static/app.js", token=False)[0] == 200
     assert call(server, "GET", "/static/../store.py", token=False)[0] == 404
     assert call(server, "GET", "/api/discussions", token=False)[0] == 401
-    assert call(server, "GET", "/api/discussions", headers={"X-Duet-Token": "wrong"})[0] == 401
+    assert call(server, "GET", "/api/discussions", headers={"X-Fugue-Token": "wrong"})[0] == 401
     assert call(server, "GET", "/api/discussions")[0] == 200
 
 
@@ -197,6 +198,21 @@ def test_models_and_efforts(server):
     status, error = call(server, "POST", "/api/discussions", {
         "question": "Q?", "cwd": str(server["work"]), "codex_model": "gpt-test-small", "codex_effort": "high"})
     assert status == 400 and "doesn't take effort 'high'" in error["error"]
+
+
+def test_delete_settings_and_status(server):
+    _, created = call(server, "POST", "/api/discussions", {"question": "Q?", "cwd": str(server["work"])})
+    wait_for_phase(server, created["id"], {"paused"})
+    assert call(server, "DELETE", f"/api/discussions/{created['id']}")[0] == 200
+    assert call(server, "GET", "/api/discussions")[1] == []
+    status, settings = call(server, "GET", "/api/settings")
+    assert status == 200 and settings["defaults"]["pause_after_each_round"] is True
+    new = {**settings["defaults"], "max_rounds": 5}
+    status, saved = call(server, "POST", "/api/settings", new)
+    assert status == 200 and saved["defaults"]["max_rounds"] == 5
+    assert call(server, "POST", "/api/settings", {**new, "max_rounds": "lots"})[0] == 400
+    status, report = call(server, "GET", "/api/status")
+    assert status == 200 and report["agents"]["codex"]["found"] and report["port"] == server["port"]
 
 
 def test_bad_input(server):
