@@ -15,27 +15,21 @@ from pathlib import Path
 
 from . import __version__
 from .agents import codex_switched_on, find_binary, user_temp_dir
-from .config import DEFAULT_TIMEOUT_MINUTES, config_path, load_config
-from .store import AGENTS, DEFAULT_CONTROL, FugueError, discussions_dir
+from .config import DEFAULT_TIMEOUT_MINUTES, config_path, default_members, load_config, normalize_member
+from .store import DEFAULT_CONTROL, TOOLS, FugueError, discussions_dir
 
 
 def read_defaults() -> dict:
     """What a new discussion starts with: the config file's values, or fugue's own defaults."""
     config = load_config()
-    defaults = {
+    return {
         "max_rounds": config.get("max_rounds", DEFAULT_CONTROL["max_rounds"]),
         "pause_after_each_round": config.get("pause_after_each_round", DEFAULT_CONTROL["pause_after_each_round"]),
         "web": config.get("web", True),
         "timeout_minutes": config.get("timeout_minutes", DEFAULT_TIMEOUT_MINUTES),
+        "members": [{"tool": m["tool"], "model": m["model"] or "", "effort": m["effort"] or "",
+                     "args": shlex.join(m["args"])} for m in default_members(config)],
     }
-    for agent in AGENTS:
-        section = config.get(agent, {})
-        defaults[agent] = {
-            "model": section.get("model") or "",
-            "effort": section.get("effort") or "",
-            "args": shlex.join(section.get("args", [])),
-        }
-    return defaults
 
 
 def save_defaults(new: dict) -> dict:
@@ -52,28 +46,19 @@ def save_defaults(new: dict) -> dict:
     timeout = new.get("timeout_minutes")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 600:
         raise FugueError("The time limit must be between 1 and 600 minutes.")
+    members = [normalize_member(member) for member in new.get("members") or []]
+    if len(members) != 2:
+        raise FugueError("A discussion has two members.")
+    if any(member["effort"] for member in members):
+        known = catalog()
+        for member in members:
+            check_effort(member["tool"], member["model"], member["effort"], known[member["tool"]])
     config.update(max_rounds=rounds, pause_after_each_round=new["pause_after_each_round"], web=new["web"],
                   timeout_minutes=timeout)
-    known = None
-    for agent in AGENTS:
-        given = new.get(agent) or {}
-        section = dict(config.get(agent, {}))
-        model, effort = str(given.get("model") or "").strip(), str(given.get("effort") or "").strip()
-        try:
-            args = shlex.split(str(given.get("args") or ""))
-        except ValueError as exc:
-            raise FugueError(f"The extra arguments for {agent} aren't valid shell syntax: {exc}") from None
-        if effort:
-            known = known or catalog()
-            check_effort(agent, model or None, effort, known[agent])
-        for key, value in (("model", model), ("effort", effort), ("args", args)):
-            if value:
-                section[key] = value
-            else:
-                section.pop(key, None)
-        config[agent] = section
-        if not section:
-            config.pop(agent)
+    # The line-up replaces the [claude] and [codex] tables of config files from before members.
+    for tool in TOOLS:
+        config.pop(tool, None)
+    config["members"] = [{key: value for key, value in member.items() if value} for member in members]
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dump_toml(config), encoding="utf-8")
@@ -92,15 +77,26 @@ def _toml_value(value) -> str:
     raise FugueError(f"fugue can't write the value {value!r} back to the config file; edit the file by hand.")
 
 
+def _is_table_list(value) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)
+
+
 def dump_toml(data: dict) -> str:
-    """Write a config with plain values and one level of tables, which is all fugue's config uses."""
-    lines = [f"{key} = {_toml_value(value)}" for key, value in data.items() if not isinstance(value, dict)]
-    for name, table in data.items():
-        if isinstance(table, dict):
-            if any(isinstance(value, dict) for value in table.values()):
-                raise FugueError(f"The config file's [{name}] has nested tables, which fugue can't rewrite; "
-                                "edit the file by hand.")
-            lines += ["", f"[{name}]", *(f"{key} = {_toml_value(value)}" for key, value in table.items())]
+    """Write a config with plain values, tables and lists of tables one level deep, which is all fugue uses."""
+    def body(table: dict, where: str) -> list[str]:
+        if any(isinstance(value, dict) or _is_table_list(value) for value in table.values()):
+            raise FugueError(f"The config file's {where} has nested tables, which fugue can't rewrite; "
+                            "edit the file by hand.")
+        return [f"{key} = {_toml_value(value)}" for key, value in table.items()]
+
+    lines = [f"{key} = {_toml_value(value)}" for key, value in data.items()
+             if not isinstance(value, dict) and not _is_table_list(value)]
+    for name, value in data.items():
+        if isinstance(value, dict):
+            lines += ["", f"[{name}]", *body(value, f"[{name}]")]
+        elif _is_table_list(value):
+            for item in value:
+                lines += ["", f"[[{name}]]", *body(item, f"[[{name}]]")]
     return "\n".join(lines).strip() + "\n"
 
 
@@ -169,7 +165,7 @@ def status(port: int) -> dict:
         "version": __version__,
         "port": port,
         "config_path": str(config_path()),
-        "agents": {agent: agent_status(agent) for agent in AGENTS},
+        "agents": {tool: agent_status(tool) for tool in TOOLS},
         "codex_switched_off": {"apps": True, **codex_switched_on()},
         "service": service_status(port),
         "storage": storage_status(),

@@ -55,6 +55,11 @@ def call(server, method, path, body=None, *, token=True, headers=None):
         return response.status, raw.decode()
 
 
+def letter_of(data, tool):
+    """The letter of the member that uses this tool, in a discussion with one Claude and one Codex."""
+    return next(letter for letter, member in data["members"].items() if member["tool"] == tool)
+
+
 def wait_for_phase(server, ident, phases, timeout=20):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -92,14 +97,21 @@ def test_create_and_run_a_discussion(server, monkeypatch):
     data = wait_for_phase(server, ident, {"finished"})
     assert [r["kind"] for r in data["rounds"]] == ["answer", "comment"]
     assert data["status"]["label"] == "Agreed in round 1"
-    assert data["rounds"][0]["entries"]["claude"]["reply"].startswith("Claude reply number 1.")
-    assert data["rounds"][1]["entries"]["codex"]["objections"] == 0
+    claude, codex = letter_of(data, "claude"), letter_of(data, "codex")
+    assert data["members"][claude]["name"] == f"Claude (member {claude})"
+    assert data["members"][claude]["short_name"] == "Claude"
+    assert data["rounds"][0]["entries"][claude]["reply"].startswith("Claude reply number 1.")
+    assert data["rounds"][1]["entries"][codex]["objections"] == 0
+    assert data["rounds"][1]["entries"][codex]["heading"].startswith(f"Codex (member {codex}), commenting on Claude")
     assert data["control"]["max_rounds"] == 2
-    assert set(data["sessions"]) == {"claude", "codex"}
+    assert set(data["sessions"]) == {"A", "B"}
+    assert data["resume"][codex] == f"cd {server['work'].resolve()} && codex resume {data['sessions'][codex]}"
+    assert data["legacy_names"] == {}
     _, listing = call(server, "GET", "/api/discussions")
     assert listing[0]["id"] == ident and listing[0]["status"]["phase"] == "finished"
-    _, prompt = call(server, "GET", f"/api/discussions/{ident}/prompt?round=1&agent=claude")
+    _, prompt = call(server, "GET", f"/api/discussions/{ident}/prompt?round=1&member={claude}")
     assert "Codex reply number 1." in prompt["text"]
+    assert call(server, "GET", f"/api/discussions/{ident}/prompt?round=1&member=claude")[0] == 404
     _, folders = call(server, "GET", "/api/folders")
     assert folders["recent"][0] == str(server["work"].resolve())
 
@@ -144,13 +156,15 @@ def test_notes_requests_and_controls(server):
     data = wait_for_phase(server, ident, {"paused"})
     assert [r["kind"] for r in data["rounds"]] == ["answer"]
 
-    assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Mind the latency.", "to": "codex"})[0] == 200
+    claude, codex = letter_of(data, "claude"), letter_of(data, "codex")
+    assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Hi", "to": "codex"})[0] == 400
+    assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Mind the latency.", "to": codex})[0] == 200
     assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Withdraw me", "to": "both"})[0] == 200
     _, data = call(server, "GET", f"/api/discussions/{ident}")
-    assert len(data["inbox"]["notes"]["codex"]) == 2 and len(data["inbox"]["notes"]["claude"]) == 1
-    assert call(server, "DELETE", f"/api/discussions/{ident}/notes", {"agent": "claude", "index": 0})[0] == 200
+    assert len(data["inbox"]["notes"][codex]) == 2 and len(data["inbox"]["notes"][claude]) == 1
+    assert call(server, "DELETE", f"/api/discussions/{ident}/notes", {"member": claude, "index": 0})[0] == 200
     _, data = call(server, "GET", f"/api/discussions/{ident}")
-    assert data["inbox"]["notes"]["claude"] == [] and len(data["inbox"]["notes"]["codex"]) == 1
+    assert data["inbox"]["notes"][claude] == [] and len(data["inbox"]["notes"][codex]) == 1
 
     assert call(server, "POST", f"/api/discussions/{ident}/control", {"max_rounds": "lots"})[0] == 400
     assert call(server, "POST", f"/api/discussions/{ident}/control", {"color": "red"})[0] == 400
@@ -162,8 +176,8 @@ def test_notes_requests_and_controls(server):
     data = wait_for_phase(server, ident, {"finished"})
     assert [r["kind"] for r in data["rounds"]] == ["answer", "comment", "update"]
     comments = data["rounds"][1]["entries"]
-    assert comments["codex"]["notes"][0]["text"] == "Mind the latency."
-    assert comments["claude"]["notes"] == []
+    assert comments[codex]["notes"][0]["text"] == "Mind the latency."
+    assert comments[claude]["notes"] == []
 
     status, queued = call(server, "POST", f"/api/discussions/{ident}/requests", {"type": "ask", "question": "And cost?"})
     assert status == 201
@@ -190,14 +204,20 @@ def test_models_and_efforts(server):
     assert models["codex"]["defaults"] == {"model": None, "effort": None}
     status, created = call(server, "POST", "/api/discussions", {
         "question": "Q?", "cwd": str(server["work"]), "max_rounds": 0,
-        "claude_model": "claude-haiku-5-5", "claude_effort": "low",
-        "codex_model": "gpt-test-small", "codex_effort": "medium"})
+        "members": [{"tool": "codex", "model": "gpt-test-small", "effort": "medium", "args": ""},
+                    {"tool": "codex", "model": "gpt-test-big", "effort": "", "args": "--add-dir ../x"}]})
     assert status == 201
     data = wait_for_phase(server, created["id"], {"finished"})
-    assert data["settings"]["claude"]["effort"] == "low" and data["settings"]["codex"]["model"] == "gpt-test-small"
+    members = sorted(data["members"].values(), key=lambda m: m["model"])
+    assert [m["model"] for m in members] == ["gpt-test-big", "gpt-test-small"]
+    assert members[0]["args"] == ["--add-dir", "../x"] and members[1]["effort"] == "medium"
+    assert {m["short_name"] for m in members} == {"Codex · gpt-test-big", "Codex · gpt-test-small · medium"}
     status, error = call(server, "POST", "/api/discussions", {
-        "question": "Q?", "cwd": str(server["work"]), "codex_model": "gpt-test-small", "codex_effort": "high"})
+        "question": "Q?", "cwd": str(server["work"]),
+        "members": [{"tool": "codex", "model": "gpt-test-small", "effort": "high"}, {"tool": "claude"}]})
     assert status == 400 and "doesn't take effort 'high'" in error["error"]
+    assert call(server, "POST", "/api/discussions", {"question": "Q?", "members": "two codexes"})[0] == 400
+    assert call(server, "POST", "/api/discussions", {"question": "Q?", "members": [{"tool": "codex"}]})[0] == 400
 
 
 def test_delete_settings_and_status(server):
@@ -207,9 +227,11 @@ def test_delete_settings_and_status(server):
     assert call(server, "GET", "/api/discussions")[1] == []
     status, settings = call(server, "GET", "/api/settings")
     assert status == 200 and settings["defaults"]["pause_after_each_round"] is True
-    new = {**settings["defaults"], "max_rounds": 5}
+    assert [m["tool"] for m in settings["defaults"]["members"]] == ["claude", "codex"]
+    new = {**settings["defaults"], "max_rounds": 5, "members": [{"tool": "claude"}, {"tool": "claude", "effort": "low"}]}
     status, saved = call(server, "POST", "/api/settings", new)
     assert status == 200 and saved["defaults"]["max_rounds"] == 5
+    assert [m["effort"] for m in saved["defaults"]["members"]] == ["", "low"]
     assert call(server, "POST", "/api/settings", {**new, "max_rounds": "lots"})[0] == 400
     status, report = call(server, "GET", "/api/status")
     assert status == 200 and report["agents"]["codex"]["found"] and report["port"] == server["port"]

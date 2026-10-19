@@ -8,7 +8,7 @@ import tomllib
 from pathlib import Path
 
 from .agents import find_binary
-from .store import AGENTS, DEFAULT_CONTROL, Discussion, FugueError
+from .store import DEFAULT_CONTROL, TOOLS, Discussion, FugueError
 
 DEFAULT_TIMEOUT_MINUTES = 30
 CONTROL_KEYS = ("max_rounds", "pause_after_each_round")
@@ -35,15 +35,58 @@ def make_title(question: str) -> str:
     return first if len(first) <= 80 else first[:77] + "..."
 
 
+def normalize_member(given: dict) -> dict:
+    """A member as fugue stores it: tool, model, effort and extra arguments (a list)."""
+    tool = str(given.get("tool") or "").strip()
+    if tool not in TOOLS:
+        raise FugueError(f"A member's tool must be one of: {', '.join(TOOLS)} (got {tool!r}).")
+    args = given.get("args") or []
+    if isinstance(args, str):
+        try:
+            args = shlex.split(args)
+        except ValueError as exc:
+            raise FugueError(f"The extra arguments for a {tool} member aren't valid shell syntax: {exc}") from None
+    return {
+        "tool": tool,
+        "model": str(given.get("model") or "").strip() or None,
+        "effort": str(given.get("effort") or "").strip() or None,
+        "args": [str(arg) for arg in args],
+    }
+
+
+def default_members(config: dict | None = None) -> list[dict]:
+    """The usual line-up from the config file: [[members]], or else one Claude and one Codex.
+
+    Config files from before members had a [claude] and a [codex] table instead.
+    """
+    config = load_config() if config is None else config
+    if isinstance(config.get("members"), list) and config["members"]:
+        return [normalize_member(member) for member in config["members"]]
+    return [normalize_member({"tool": tool, **config.get(tool, {})}) for tool in TOOLS]
+
+
+def check_members(members: list[dict]) -> None:
+    if len(members) != 2:
+        raise FugueError("A discussion has two members.")
+    for tool in {member["tool"] for member in members}:
+        find_binary(tool)
+    if any(member["effort"] for member in members):
+        from .models import catalog, check_effort
+
+        known = catalog()
+        for member in members:
+            check_effort(member["tool"], member["model"], member["effort"], known[member["tool"]])
+
+
 def new_discussion(question: str, *, cwd: Path, title: str | None = None, timeout_minutes: float | None = None,
-                   models: dict | None = None, efforts: dict | None = None, extra_args: dict | None = None,
-                   web: bool | None = None, control: dict | None = None) -> Discussion:
+                   members: list[dict] | None = None, web: bool | None = None,
+                   control: dict | None = None) -> Discussion:
     """Create a discussion from the config file's defaults with the given values on top.
 
-    `models` and `efforts` that are None fall back to the config file, then to the
-    tool's own default (fugue passes nothing).
-    `extra_args` values are strings in shell syntax, added after the config file's args.
-    `control` values that are None fall back to the config file, then to fugue's defaults.
+    `members` lists each member's tool, model, effort and extra arguments, in the
+    order the user gave them; their letters are drawn at random. Without it, the
+    config file's line-up is used. `control` values that are None fall back to
+    the config file, then to fugue's defaults.
     """
     question = question.strip()
     if not question:
@@ -51,31 +94,18 @@ def new_discussion(question: str, *, cwd: Path, title: str | None = None, timeou
     cwd = cwd.expanduser().resolve()
     if not cwd.is_dir():
         raise FugueError(f"Not a folder: {cwd}")
-    for agent in AGENTS:
-        find_binary(agent)
     config = load_config()
-    models, efforts, extra_args, control = models or {}, efforts or {}, extra_args or {}, control or {}
+    chosen_members = [normalize_member(m) for m in members] if members else default_members(config)
+    check_members(chosen_members)
+    control = control or {}
     settings: dict = {
         "timeout_minutes": timeout_minutes or config.get("timeout_minutes", DEFAULT_TIMEOUT_MINUTES),
-        # Whether the members may use the web: both or neither.
+        # Whether the members may use the web: all or none.
         "web": web if web is not None else bool(config.get("web", True)),
     }
-    for agent in AGENTS:
-        section = config.get(agent, {})
-        settings[agent] = {
-            "model": models.get(agent) or section.get("model"),
-            "effort": efforts.get(agent) or section.get("effort"),
-            "args": [*section.get("args", []), *shlex.split(extra_args.get(agent) or "")],
-        }
-    if any(settings[agent]["effort"] for agent in AGENTS):
-        from .models import catalog, check_effort
-
-        known = catalog()
-        for agent in AGENTS:
-            check_effort(agent, settings[agent]["model"], settings[agent]["effort"], known[agent])
     chosen = {}
     for key in CONTROL_KEYS:
         value = control.get(key)
         chosen[key] = value if value is not None else config.get(key, DEFAULT_CONTROL[key])
     return Discussion.create(question=question, title=title or make_title(question), cwd=cwd,
-                             settings=settings, control=chosen)
+                             members=chosen_members, settings=settings, control=chosen)

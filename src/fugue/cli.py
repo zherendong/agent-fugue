@@ -17,8 +17,7 @@ from pathlib import Path
 from . import __version__, engine, transcript
 from .agents import format_duration
 from .config import DEFAULT_TIMEOUT_MINUTES, new_discussion
-from .prompts import NAMES
-from .store import AGENTS, Discussion, FugueError, list_discussions, select_discussion
+from .store import TOOL_NAMES, TOOLS, Discussion, FugueError, list_discussions, select_discussion
 
 
 def err(message: str = "") -> None:
@@ -56,13 +55,13 @@ def edit_in_editor() -> str:
 # Showing a discussion in the terminal while it runs
 
 
-def print_entries(discussion: Discussion, rnd: dict, agents: list[str]) -> None:
-    for agent in agents:
-        entry = rnd["entries"][agent]
-        heading = transcript.entry_heading(rnd["kind"], agent, discussion.labels)
+def print_entries(discussion: Discussion, rnd: dict, letters: list[str]) -> None:
+    for letter in letters:
+        entry = rnd["entries"][letter]
+        heading = transcript.entry_heading(rnd["kind"], discussion, letter)
         print(f"\n━━━ Round {rnd['index']} · {heading} ━━━\n")
         if entry["status"] == "done":
-            print(discussion.read_reply(rnd["index"], agent).rstrip())
+            print(discussion.read_reply(rnd["index"], letter).rstrip())
         else:
             print(f"(No reply: {entry.get('error') or 'not run yet'})")
     print(flush=True)
@@ -90,8 +89,8 @@ class TerminalView:
         if not self.live or not self.working:
             return
         width = shutil.get_terminal_size((100, 20)).columns
-        parts = [f"{NAMES[a]} {format_duration(time.monotonic() - w['since'])} · {w['doing']}"
-                 for a, w in self.working.items()]
+        parts = [f"{self.discussion.name(m)} {format_duration(time.monotonic() - w['since'])} · {w['doing']}"
+                 for m, w in self.working.items()]
         line = "  " + "  │  ".join(parts)
         sys.stderr.write("\r\x1b[2K" + (line if len(line) < width else line[: width - 2] + "…"))
         sys.stderr.flush()
@@ -106,34 +105,35 @@ class TerminalView:
             self._draw()
 
     def _handle(self, event: dict) -> None:
-        kind, agent = event["type"], event.get("agent")
+        kind, member = event["type"], event.get("member")
+        name = self.discussion.name
         if kind == "round_started":
             self.discussion.reload()  # the runner keeps its own copy of the state
             label = transcript.round_heading(self.discussion.rounds[event["round"]])
             self._clear()
-            err(f"{label}: asking {' and '.join(NAMES[a] for a in event['agents'])}")
+            err(f"{label}: asking {' and '.join(name(m) for m in event['members'])}")
         elif kind == "agent_started":
-            self.working[agent] = {"since": time.monotonic(), "doing": "starting"}
-        elif kind == "activity" and agent in self.working:
-            self.working[agent]["doing"] = event["text"]
-        elif kind == "text_delta" and agent in self.working:
-            self.working[agent]["doing"] = "writing"
-        elif kind == "progress" and agent in self.working:
-            self.working[agent]["doing"] = f"thinking (about {event['thinking_tokens']:,} tokens)"
+            self.working[member] = {"since": time.monotonic(), "doing": "starting"}
+        elif kind == "activity" and member in self.working:
+            self.working[member]["doing"] = event["text"]
+        elif kind == "text_delta" and member in self.working:
+            self.working[member]["doing"] = "writing"
+        elif kind == "progress" and member in self.working:
+            self.working[member]["doing"] = f"thinking (about {event['thinking_tokens']:,} tokens)"
         elif kind == "agent_finished":
-            self.working.pop(agent, None)
+            self.working.pop(member, None)
             self._clear()
             if event["ok"]:
                 objections = event.get("objections")
                 extra = "" if objections is None else f", {objections} objection{'' if objections == 1 else 's'}"
-                err(f"  {NAMES[agent]} finished in {format_duration(event['duration_s'])}{extra}")
+                err(f"  {name(member)} finished in {format_duration(event['duration_s'])}{extra}")
             else:
-                err(f"  {NAMES[agent]} stopped after {format_duration(event['duration_s'])}: {event['error']}")
+                err(f"  {name(member)} stopped after {format_duration(event['duration_s'])}: {event['error']}")
         elif kind == "round_finished" and not self.quiet:
             self.discussion.reload()
             rnd = self.discussion.rounds[event["round"]]
             self._clear()
-            print_entries(self.discussion, rnd, [a for a, e in rnd["entries"].items() if e["status"] == "done"])
+            print_entries(self.discussion, rnd, [m for m, e in rnd["entries"].items() if e["status"] == "done"])
         elif kind == "notice":
             self._clear()
             err(event["text"])
@@ -176,6 +176,27 @@ def run_here(discussion: Discussion, quiet: bool) -> int:
 # Commands
 
 
+def parse_members(specs: list[str] | None, extra: list[str] | None) -> list[dict] | None:
+    """The members from `--member TOOL[:MODEL[:EFFORT]]` (given twice) and their `--member-args`, in order."""
+    if not specs:
+        if extra:
+            raise FugueError("--member-args goes with --member; to change the saved line-up, use the "
+                             "Settings page or the config file.")
+        return None
+    if len(specs) != 2:
+        raise FugueError("Give --member twice, once for each member, or leave it out to use your saved line-up.")
+    extra = extra or []
+    if len(extra) > len(specs):
+        raise FugueError("There are more --member-args than members.")
+    members = []
+    for index, spec in enumerate(specs):
+        tool, _, rest = spec.partition(":")
+        model, _, effort = rest.partition(":")
+        members.append({"tool": tool.strip().lower(), "model": model, "effort": effort,
+                        "args": extra[index] if index < len(extra) else ""})
+    return members
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     question = read_text(args.question, args.file, "question")
     discussion = new_discussion(
@@ -183,16 +204,17 @@ def cmd_start(args: argparse.Namespace) -> int:
         cwd=Path(args.cwd) if args.cwd else Path.cwd(),
         title=args.title,
         timeout_minutes=args.timeout,
-        models={"claude": args.claude_model, "codex": args.codex_model},
-        efforts={"claude": args.claude_effort, "codex": args.codex_effort},
+        members=parse_members(args.member, args.member_args),
         web=False if args.no_web else None,
-        extra_args={"claude": args.claude_args, "codex": args.codex_args},
         control={
             "max_rounds": args.rounds,
             "pause_after_each_round": False if args.no_pause else None,
         },
     )
     err(f"Started discussion {discussion.id}")
+    for letter in discussion.members:
+        err(f"  Member {letter}: {TOOL_NAMES[discussion.members[letter]['tool']]}, "
+            f"{describe_choice(discussion.members[letter])}")
     return run_here(discussion, args.quiet)
 
 
@@ -243,9 +265,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
 def cmd_note(args: argparse.Namespace) -> int:
     discussion = select_discussion(args.discussion)
     text = read_text(args.text, args.file, "note")
-    to = list(AGENTS) if args.to == "both" else [args.to]
+    target = args.to.upper() if args.to != "both" else "both"
+    if target != "both" and target not in discussion.members:
+        raise FugueError(f"--to must be both or a member's letter ({', '.join(discussion.members)}).")
+    to = list(discussion.members) if target == "both" else [target]
     discussion.add_note(text, to)
-    names = " and ".join(NAMES[a] for a in to)
+    names = " and ".join(discussion.name(m) for m in to)
     err(f"Saved. It will be added to the next message fugue sends to {names}.")
     return 0
 
@@ -281,41 +306,43 @@ def cmd_status(args: argparse.Namespace) -> int:
     if status.get("next"):
         print(f"Next:       {status['next']}")
     print(f"Web:        {'both members may use it' if state['settings'].get('web', True) else 'off for both members'}")
-    labels = discussion.labels
-    print(f"Claude:     member {labels['claude']}, {describe_choice('claude', state['settings'])}")
-    print(f"Codex:      member {labels['codex']}, {describe_choice('codex', state['settings'])}")
+    letters = list(discussion.members)
+    for letter in letters:
+        print(f"Member {letter}:   {TOOL_NAMES[discussion.members[letter]['tool']]}, "
+              f"{describe_choice(discussion.members[letter])}")
     print(f"Transcript: {discussion.transcript_path}")
     print()
-    rows = [("Round", "What", "Claude", "Codex")]
+    rows = [("Round", "What", *(f"Member {letter}" for letter in letters))]
     for rnd in discussion.rounds:
         what = transcript.round_heading(rnd).split(": ", 1)[1]
-        rows.append((str(rnd["index"]), what, _cell(rnd["entries"].get("claude")),
-                     _cell(rnd["entries"].get("codex"))))
-    widths = [max(len(row[i]) for row in rows) for i in range(3)]
+        rows.append((str(rnd["index"]), what, *(_cell(rnd["entries"].get(letter)) for letter in letters)))
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)]
     for row in rows:
-        print("  ".join(cell.ljust(width) for cell, width in zip(row[:3], widths)) + "  " + row[3])
+        print("  ".join(cell.ljust(width) for cell, width in zip(row[:-1], widths)) + "  " + row[-1])
 
     inbox = discussion.read_inbox()
-    waiting = [NAMES[a] for a in AGENTS if inbox["notes"].get(a)]
+    waiting = [discussion.name(letter) for letter in letters if inbox["notes"].get(letter)]
     if waiting:
         print(f"\nNotes waiting for the next round, for: {', '.join(waiting)}")
     for request in inbox["requests"]:
         print(f"Queued: {request['type']}")
 
-    entries = [e for rnd in discussion.rounds for e in rnd["entries"].values()]
-    cost = sum(e.get("cost_usd") or 0 for e in entries)
-    tokens_in = sum((e.get("tokens") or {}).get("input_tokens", 0) for e in entries)
-    tokens_out = sum((e.get("tokens") or {}).get("output_tokens", 0) for e in entries)
-    print(f"\nUsage so far: Claude reported ${cost:.2f}; Codex used {tokens_in:,} input and "
-          f"{tokens_out:,} output tokens.")
+    print("\nUsage so far:")
+    for letter in letters:
+        entries = [rnd["entries"][letter] for rnd in discussion.rounds if letter in rnd["entries"]]
+        if discussion.members[letter]["tool"] == "claude":
+            cost = sum(e.get("cost_usd") or 0 for e in entries)
+            print(f"  {discussion.name(letter)}: reported ${cost:.2f}")
+        else:
+            tokens_in = sum((e.get("tokens") or {}).get("input_tokens", 0) for e in entries)
+            tokens_out = sum((e.get("tokens") or {}).get("output_tokens", 0) for e in entries)
+            print(f"  {discussion.name(letter)}: {tokens_in:,} input and {tokens_out:,} output tokens")
 
     sessions = state["sessions"]
     if sessions:
-        print("\nTo carry on with either agent yourself, with its full memory of this discussion:")
-        if "claude" in sessions:
-            print(f"  cd {shlex.quote(str(discussion.cwd))} && claude --resume {sessions['claude']}")
-        if "codex" in sessions:
-            print(f"  cd {shlex.quote(str(discussion.cwd))} && codex resume {sessions['codex']}")
+        print("\nTo carry on with a member yourself, with its full memory of this discussion:")
+        for letter, session_id in sessions.items():
+            print(f"  {discussion.name(letter)}: {transcript.resume_command(discussion, letter, session_id)}")
     return 0
 
 
@@ -328,14 +355,17 @@ def cmd_show(args: argparse.Namespace) -> int:
     except IndexError:
         raise FugueError(f"There is no round {args.round}; this discussion has "
                         f"{len(discussion.rounds)} (0 to {len(discussion.rounds) - 1}).") from None
-    agents = [a for a in AGENTS if a in rnd["entries"] and (args.agent in (None, a))]
+    wanted = args.member.upper() if args.member else None
+    if wanted and wanted not in discussion.members:
+        raise FugueError(f"--member must be one of the letters {', '.join(discussion.members)}.")
+    letters = [m for m in discussion.members if m in rnd["entries"] and wanted in (None, m)]
     if args.prompt:
-        for agent in agents:
-            print(f"\n━━━ Round {rnd['index']} · exactly what fugue sent to {NAMES[agent]} ━━━\n")
-            print(discussion.prompt_path(rnd["index"], agent).read_text().rstrip())
+        for letter in letters:
+            print(f"\n━━━ Round {rnd['index']} · exactly what fugue sent to {discussion.name(letter)} ━━━\n")
+            print(discussion.prompt_path(rnd["index"], letter).read_text().rstrip())
         print()
     else:
-        print_entries(discussion, rnd, agents)
+        print_entries(discussion, rnd, letters)
     return 0
 
 
@@ -365,7 +395,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
             err("Kept.")
             return 1
     discussion.move_to_trash()
-    err(f"Moved {discussion.id} to the Trash. Claude's and Codex's own sessions are kept, so "
+    err(f"Moved {discussion.id} to the Trash. The members' own sessions are kept, so "
         "`claude --resume` and `codex resume` still find them.")
     return 0
 
@@ -378,20 +408,20 @@ def cmd_open(args: argparse.Namespace) -> int:
     return 0
 
 
-def describe_choice(agent: str, settings: dict) -> str:
-    """How one agent runs in a discussion, e.g. "claude-opus-5-5 at high"."""
-    chosen = settings.get(agent, {})
-    model = chosen.get("model") or "its default model"
-    effort = f"effort {chosen['effort']}" if chosen.get("effort") else "its default effort"
-    return f"{model}, {effort}"
+def describe_choice(member: dict) -> str:
+    """How one member runs, e.g. "claude-opus-5-5, effort high"."""
+    model = member.get("model") or "its default model"
+    effort = f"effort {member['effort']}" if member.get("effort") else "its default effort"
+    extra = f", with {shlex.join(member['args'])}" if member.get("args") else ""
+    return f"{model}, {effort}{extra}"
 
 
 def cmd_models(args: argparse.Namespace) -> int:
     from .models import catalog
 
     known = catalog(refresh=args.refresh)
-    for agent in AGENTS:
-        entry = known[agent]
+    for tool in TOOLS:
+        entry = known[tool]
         defaults = entry["defaults"]
         default = defaults.get("model") or "not set"
         if defaults.get("effort"):
@@ -399,15 +429,15 @@ def cmd_models(args: argparse.Namespace) -> int:
         checked = ""
         if entry.get("checked_at"):
             checked = time.strftime(", checked %Y-%m-%d %H:%M", time.localtime(entry["checked_at"]))
-        print(f"{NAMES[agent]} ({entry['source']}{checked})")
+        print(f"{TOOL_NAMES[tool]}, tool name `{tool}` ({entry['source']}{checked})")
         print(f"  Default, used when you choose nothing: {default}")
         width = max(len(m["id"]) for m in entry["models"])
         for model in entry["models"]:
             extra = f"  (default {model['default_effort']})" if model.get("default_effort") else ""
             print(f"  {model['id']:<{width}}  {model['name']:<18}  {' '.join(model['efforts'])}{extra}")
         print()
-    err("Use them with `fugue start --claude-model ID --claude-effort LEVEL` (and --codex-...), "
-        "or pick them on the page.")
+    err("Use them with `fugue start --member TOOL:MODEL:EFFORT --member TOOL:MODEL:EFFORT`, "
+        "for example --member claude:claude-opus-5-5:high --member codex::medium, or pick them on the page.")
     return 0
 
 
@@ -432,7 +462,8 @@ def cmd_service(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fugue",
-        description="Ask Claude Code and Codex the same question, then let them review each other.",
+        description="Ask two agents (Claude Code, Codex, or two of either) the same question, "
+                    "then let them review each other.",
     )
     parser.add_argument("--version", action="version", version=f"fugue {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -462,8 +493,8 @@ def build_parser() -> argparse.ArgumentParser:
     actions.add_parser("restart", help="restart it, for example after changing fugue's code")
     p.set_defaults(func=cmd_service)
 
-    p = sub.add_parser("start", parents=[quiet], help="ask both agents a new question",
-                       description="Ask both agents a new question. Each answers on its own; then rounds of "
+    p = sub.add_parser("start", parents=[quiet], help="ask both members a new question",
+                       description="Ask both members a new question. Each answers on its own; then rounds of "
                                    "comments (each comments on the other's answer) and updates (each rewrites "
                                    "its answer in light of the comments) alternate, until neither has "
                                    "objections or the round limit is reached. It pauses after every round "
@@ -478,14 +509,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="don't let either member use the web (on by default for both)")
     p.add_argument("--title", help="short name for the discussion (default: the question's first line)")
     p.add_argument("--cwd", help="folder the agents work in (default: the current folder)")
-    p.add_argument("--claude-model", metavar="ID", help="model for Claude, e.g. claude-opus-5-5 (see `fugue models`)")
-    p.add_argument("--codex-model", metavar="ID", help="model for Codex, e.g. gpt-6.1-sol (see `fugue models`)")
-    p.add_argument("--claude-effort", metavar="LEVEL", help="effort for Claude, e.g. high (see `fugue models`)")
-    p.add_argument("--codex-effort", metavar="LEVEL", help="reasoning effort for Codex, e.g. medium")
-    p.add_argument("--claude-args", metavar="ARGS",
-                   help='extra arguments for `claude -p`, e.g. --claude-args="--add-dir ../shared"')
-    p.add_argument("--codex-args", metavar="ARGS",
-                   help="extra arguments for `codex exec`, e.g. --codex-args='-c web_search=\"disabled\"'")
+    p.add_argument("--member", action="append", metavar="TOOL[:MODEL[:EFFORT]]",
+                   help="a member: claude or codex, optionally with a model and effort (see `fugue models`). "
+                        "Give it twice, e.g. --member claude:claude-opus-5-5:high --member codex:gpt-6.1-sol, "
+                        "or --member codex::high --member codex::low; leave out a part for the tool's own "
+                        "default. Without --member, your saved line-up is used (Settings on the page).")
+    p.add_argument("--member-args", action="append", metavar="ARGS",
+                   help='extra arguments for the matching --member (`claude -p` or `codex exec`), in the same '
+                        'order, e.g. --member-args="--add-dir ../shared"')
     p.add_argument("--timeout", type=float, metavar="MINUTES",
                    help=f"give up on an agent after this long (default: {DEFAULT_TIMEOUT_MINUTES})")
     p.set_defaults(func=cmd_start)
@@ -497,8 +528,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run one more round, even after they agreed or reached the limit")
     p.set_defaults(func=cmd_next)
 
-    p = sub.add_parser("ask", parents=[which, quiet], help="ask both agents a follow-up question",
-                       description="Ask a follow-up question in the same discussion. Each agent answers on "
+    p = sub.add_parser("ask", parents=[which, quiet], help="ask both members a follow-up question",
+                       description="Ask a follow-up question in the same discussion. Each member answers on "
                                    "its own first, then comment and update rounds follow as before.")
     p.add_argument("question", nargs="?", help="the question; - for stdin, or leave it out to use $EDITOR")
     p.add_argument("-f", "--file", help="read the question from this file")
@@ -508,26 +539,26 @@ def build_parser() -> argparse.ArgumentParser:
                        description="Save a note from you. fugue adds it to the next message it sends.")
     p.add_argument("text", nargs="?", help="the note; use - for stdin, or leave it out to use $EDITOR")
     p.add_argument("-f", "--file", help="read the note from this file")
-    p.add_argument("--to", choices=["both", "claude", "codex"], default="both",
-                   help="who gets the note (default: both)")
+    p.add_argument("--to", default="both", metavar="both|A|B",
+                   help="who gets the note: both, or one member's letter (default: both)")
     p.set_defaults(func=cmd_note)
 
     p = sub.add_parser("pause", parents=[which], help="pause when the current round finishes")
     p.set_defaults(func=cmd_pause)
 
-    p = sub.add_parser("stop", parents=[which], help="stop the agents now, mid-round")
+    p = sub.add_parser("stop", parents=[which], help="stop the members now, mid-round")
     p.set_defaults(func=cmd_stop)
 
-    p = sub.add_parser("status", parents=[which], help="show the rounds so far and how to resume each agent")
+    p = sub.add_parser("status", parents=[which], help="show the rounds so far and how to resume each member")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("show", parents=[which], help="print the replies from one round")
     p.add_argument("round", nargs="?", type=int, help="round number (default: the last one)")
-    p.add_argument("--agent", choices=["claude", "codex"], help="only this agent's reply")
+    p.add_argument("--member", metavar="A|B", help="only this member's reply")
     p.add_argument("--prompt", action="store_true", help="show exactly what fugue sent instead of the reply")
     p.set_defaults(func=cmd_show)
 
-    p = sub.add_parser("models", help="list the models and effort levels you can choose for each agent",
+    p = sub.add_parser("models", help="list the models and effort levels you can choose for each tool",
                        description="Codex's list comes from `codex debug models` (fugue keeps a copy for a "
                                    "day); Claude's is built into fugue, since Claude Code has no such command.")
     p.add_argument("--refresh", action="store_true", help="ask Codex again instead of using fugue's copy")
@@ -539,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("delete", help="move a discussion to the Trash",
                        description="Move a discussion's folder to the Trash, where Finder can restore it. "
-                                   "Claude's and Codex's own sessions are kept.")
+                                   "The members' own Claude and Codex sessions are kept.")
     p.add_argument("id", help="the discussion's id, or a unique start of it (see `fugue list`)")
     p.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
     p.set_defaults(func=cmd_delete)

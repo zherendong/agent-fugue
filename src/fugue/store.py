@@ -4,6 +4,10 @@ Every discussion is a folder under ~/.fugue/discussions/ (or $FUGUE_HOME/discuss
 Only the process running a discussion writes its state and its event log.
 Anyone (the command line, the web page) may add notes and requests to its
 inbox or change its controls; the running process picks them up.
+
+A discussion's members are known by letter ("A", "B"), drawn at random when
+it starts. Each member is a tool (Claude Code or Codex) with its own model,
+effort and extra arguments; two members may use the same tool and model.
 """
 
 from __future__ import annotations
@@ -20,7 +24,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-AGENTS = ("claude", "codex")
+TOOLS = ("claude", "codex")
+TOOL_NAMES = {"claude": "Claude", "codex": "Codex"}
+LETTERS = "AB"
 
 # How a discussion moves forward on its own. Anyone may change these at any time.
 DEFAULT_CONTROL = {
@@ -35,18 +41,55 @@ class FugueError(Exception):
     """An error to show the user as a plain message, without a traceback."""
 
 
-def other_agent(agent: str) -> str:
-    return "codex" if agent == "claude" else "claude"
+def assign_letters(count: int, seed: str | None = None) -> list[str]:
+    """Letters for `count` members, in random order, so the first member isn't always "A".
 
-
-def assign_labels(seed: str | None = None) -> dict[str, str]:
-    """Give each member a letter for the whole discussion, at random, so no tool is always "A".
-
-    With a seed the letters are the same every time, which keeps them stable for
-    discussions made before letters existed until their state is next saved.
+    With a seed the order is the same every time (for converting old discussions).
     """
     rng = random.Random(seed) if seed is not None else random
-    return dict(zip(AGENTS, rng.sample("AB", len(AGENTS))))
+    return rng.sample(LETTERS[:count], count)
+
+
+def member_name(members: dict, letter: str, with_letter: bool = True) -> str:
+    """A member's name for the user, e.g. "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)"
+    when another member uses the same tool."""
+    member = members[letter]
+    name = TOOL_NAMES[member["tool"]]
+    if sum(1 for m in members.values() if m["tool"] == member["tool"]) > 1:
+        name += f" · {member.get('model') or 'default model'}"
+        if member.get("effort"):
+            name += f" · {member['effort']}"
+    return f"{name} (member {letter})" if with_letter else name
+
+
+def upgrade_state(state: dict) -> dict:
+    """Convert a discussion from before members (one Claude, one Codex, keyed by tool).
+
+    Claude and Codex get the letters they were already shown with, and keep
+    their reply files, which are named after the tool. Nothing is written here;
+    the new form is saved the next time the discussion is.
+    """
+    if "members" in state:
+        return state
+    if "labels" in state:
+        letters = state["labels"]
+    else:
+        letters = dict(zip(TOOLS, assign_letters(len(TOOLS), seed=state["id"])))
+    settings = state.get("settings", {})
+    members = {}
+    for tool in TOOLS:
+        own = settings.get(tool, {})
+        members[letters[tool]] = {"tool": tool, "model": own.get("model"), "effort": own.get("effort"),
+                                  "args": own.get("args", []), "files": tool}
+    new = {key: value for key, value in state.items() if key != "labels"}
+    new["version"] = 3
+    new["members"] = dict(sorted(members.items()))
+    new["settings"] = {key: value for key, value in settings.items() if key not in TOOLS}
+    new["legacy_names"] = {tool: letters[tool] for tool in TOOLS}
+    new["sessions"] = {letters[tool]: sid for tool, sid in state.get("sessions", {}).items() if tool in letters}
+    new["rounds"] = [{**rnd, "entries": {letters.get(name, name): entry for name, entry in rnd["entries"].items()}}
+                     for rnd in state.get("rounds", [])]
+    return new
 
 
 def now_iso() -> str:
@@ -89,7 +132,7 @@ class Discussion:
 
     def __init__(self, path: Path, state: dict):
         self.path = path
-        self.state = state
+        self.state = upgrade_state(state)
         self.listeners: list[Callable[[dict], None]] = []
         self._events = None
         self._seq = 0
@@ -97,7 +140,8 @@ class Discussion:
     # -- creating and loading
 
     @classmethod
-    def create(cls, *, question: str, title: str, cwd: Path, settings: dict, control: dict) -> "Discussion":
+    def create(cls, *, question: str, title: str, cwd: Path, members: list[dict], settings: dict,
+               control: dict) -> "Discussion":
         root = discussions_dir()
         stamp = time.strftime("%Y%m%d-%H%M%S")
         slug = _slug(title)
@@ -108,16 +152,17 @@ class Discussion:
         path = root / ident
         (path / "rounds").mkdir(parents=True)
         (path / "logs").mkdir()
+        letters = assign_letters(len(members))
         state = {
-            "version": 2,
+            "version": 3,
             "id": ident,
             "title": title,
             "question": question,
             "cwd": str(cwd),
             "created_at": now_iso(),
             "updated_at": now_iso(),
+            "members": dict(sorted(zip(letters, members))),
             "settings": settings,
-            "labels": assign_labels(),
             "sessions": {},
             "rounds": [],
         }
@@ -140,7 +185,7 @@ class Discussion:
         return cls.load(path)
 
     def reload(self) -> None:
-        self.state = json.loads((self.path / "state.json").read_text())
+        self.state = upgrade_state(json.loads((self.path / "state.json").read_text()))
 
     def save(self) -> None:
         self.state["updated_at"] = now_iso()
@@ -165,11 +210,16 @@ class Discussion:
         return self.state["rounds"]
 
     @property
-    def labels(self) -> dict[str, str]:
-        """Each member's letter. Discussions made before letters existed get them on first use."""
-        if "labels" not in self.state:
-            self.state["labels"] = assign_labels(seed=self.id)
-        return self.state["labels"]
+    def members(self) -> dict[str, dict]:
+        """Each member by letter: its tool, model, effort and extra arguments."""
+        return self.state["members"]
+
+    def other(self, letter: str) -> str:
+        """The other member (a discussion has two)."""
+        return next(other for other in self.members if other != letter)
+
+    def name(self, letter: str, with_letter: bool = True) -> str:
+        return member_name(self.members, letter, with_letter)
 
     @property
     def transcript_path(self) -> Path:
@@ -179,14 +229,21 @@ class Discussion:
     def events_path(self) -> Path:
         return self.path / "events.jsonl"
 
-    def prompt_path(self, index: int, agent: str) -> Path:
-        return self.path / "rounds" / f"{index:02d}-{agent}.prompt.md"
+    def _stem(self, letter: str) -> str:
+        # Converted discussions keep their files, which are named after the tool.
+        return self.members[letter].get("files") or letter
 
-    def reply_path(self, index: int, agent: str) -> Path:
-        return self.path / "rounds" / f"{index:02d}-{agent}.md"
+    def prompt_path(self, index: int, letter: str) -> Path:
+        return self.path / "rounds" / f"{index:02d}-{self._stem(letter)}.prompt.md"
 
-    def read_reply(self, index: int, agent: str) -> str:
-        return self.reply_path(index, agent).read_text()
+    def reply_path(self, index: int, letter: str) -> Path:
+        return self.path / "rounds" / f"{index:02d}-{self._stem(letter)}.md"
+
+    def log_stem(self, index: int, letter: str) -> Path:
+        return self.path / "logs" / f"{index:02d}-{self._stem(letter)}"
+
+    def read_reply(self, index: int, letter: str) -> str:
+        return self.reply_path(index, letter).read_text()
 
     def move_to_trash(self) -> None:
         """Move this discussion's folder to the Trash, where it can be restored from Finder.
@@ -286,28 +343,40 @@ class Discussion:
             control.update(changes)
             return {**DEFAULT_CONTROL, **control}
 
+    def _letters_for_notes(self, notes: dict) -> dict:
+        """Notes keyed by member letter (converted discussions may have them keyed by tool)."""
+        out: dict[str, list] = {}
+        for key, value in notes.items():
+            out.setdefault(self.state.get("legacy_names", {}).get(key, key), []).extend(value)
+        return out
+
+    @contextmanager
     def _inbox(self):
-        return self._locked_json("inbox.json", {"notes": {}, "requests": []})
+        with self._locked_json("inbox.json", {"notes": {}, "requests": []}) as inbox:
+            inbox["notes"] = self._letters_for_notes(inbox.get("notes", {}))
+            inbox.setdefault("requests", [])
+            yield inbox
 
     def add_note(self, text: str, to: list[str]) -> None:
         with self._inbox() as inbox:
-            for agent in to:
-                inbox["notes"].setdefault(agent, []).append({"text": text, "shared": len(to) > 1})
+            for letter in to:
+                inbox["notes"].setdefault(letter, []).append({"text": text, "shared": len(to) > 1})
 
-    def remove_note(self, agent: str, index: int) -> None:
+    def remove_note(self, letter: str, index: int) -> None:
         with self._inbox() as inbox:
-            notes = inbox["notes"].get(agent, [])
+            notes = inbox["notes"].get(letter, [])
             if 0 <= index < len(notes):
                 removed = notes.pop(index)
-                # A note sent to both agents is withdrawn from both.
+                # A note sent to every member is withdrawn from all of them.
                 if removed["shared"]:
-                    other = inbox["notes"].get(other_agent(agent), [])
-                    inbox["notes"][other_agent(agent)] = [
-                        n for n in other if not (n["shared"] and n["text"] == removed["text"])]
+                    for other, theirs in inbox["notes"].items():
+                        if other != letter:
+                            inbox["notes"][other] = [
+                                n for n in theirs if not (n["shared"] and n["text"] == removed["text"])]
 
-    def take_notes(self, agent: str) -> list[dict]:
+    def take_notes(self, letter: str) -> list[dict]:
         with self._inbox() as inbox:
-            return inbox["notes"].pop(agent, [])
+            return inbox["notes"].pop(letter, [])
 
     def add_request(self, request: dict) -> dict:
         request = {"id": f"{time.time_ns():x}", **request}
@@ -322,7 +391,7 @@ class Discussion:
     def read_inbox(self) -> dict:
         path = self.path / "inbox.json"
         inbox = json.loads(path.read_text()) if path.exists() else {}
-        return {"notes": inbox.get("notes", {}), "requests": inbox.get("requests", [])}
+        return {"notes": self._letters_for_notes(inbox.get("notes", {})), "requests": inbox.get("requests", [])}
 
 
 def list_discussions() -> list[Discussion]:

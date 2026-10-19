@@ -10,6 +10,9 @@
   --accent-text: #ffffff;
   --claude: #b4532a;
   --codex: #2563eb;
+  /* The second member when both use the same tool. */
+  --claude-alt: #8a5a00;
+  --codex-alt: #0f766e;
   --ok: #1d7f47;
   --warn: #a8670f;
   --danger: #c0352b;
@@ -32,6 +35,8 @@
     --accent-text: #0d1424;
     --claude: #e58a5c;
     --codex: #74a5ff;
+    --claude-alt: #e0b04c;
+    --codex-alt: #4fc4b4;
     --ok: #4cc27f;
     --warn: #e0a84c;
     --danger: #f2756b;
@@ -215,6 +220,8 @@ button.link:hover { color: var(--text); text-decoration: underline; }
 .agent-card { border-top: 3px solid var(--muted); min-width: 0; }
 .agent-card.claude { border-top-color: var(--claude); }
 .agent-card.codex { border-top-color: var(--codex); }
+.agent-card.claude.alt { border-top-color: var(--claude-alt); }
+.agent-card.codex.alt { border-top-color: var(--codex-alt); }
 .agent-card > header {
   display: flex;
   align-items: baseline;
@@ -224,6 +231,8 @@ button.link:hover { color: var(--text); text-decoration: underline; }
 .agent-name { font-weight: 650; }
 .claude .agent-name { color: var(--claude); }
 .codex .agent-name { color: var(--codex); }
+.claude.alt .agent-name { color: var(--claude-alt); }
+.codex.alt .agent-name { color: var(--codex-alt); }
 .agent-card .sub { color: var(--muted); font-size: 12.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-card .state { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .status-running .state { color: var(--accent); }
@@ -443,18 +452,27 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
   #content { padding: 16px; }
   #composer { padding: 8px 16px 12px; }
   .form .grid { grid-template-columns: 1fr; }
+  .form .member-row { grid-template-columns: 1fr; gap: 6px; }
 }
 
-/* ---------- model pickers ---------- */
+/* ---------- members: tool, model, effort, extra arguments ---------- */
 
-.form .models { display: flex; flex-direction: column; gap: 8px; }
-.form .model-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.form .model-row .agent-name { width: 54px; }
-.form .model-row select { padding: 4px 8px; min-width: 210px; }
-.form .model-row input[type="text"] { width: 220px; }
+.form .members { display: flex; flex-direction: column; gap: 8px; }
+.form .member-row { display: grid; grid-template-columns: 74px 1fr; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.form .member-row .member-num { font-weight: 600; font-size: 13px; padding-top: 5px; }
+.form .member-body { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.form .member-row select { padding: 4px 8px; }
+.form .member-row select.tool { min-width: 120px; }
+.form .member-row select.model { min-width: 210px; }
+.form .member-row input.model-other { width: 200px; }
+.form .member-row input.args { flex: 1 1 100%; font-family: var(--mono); font-size: 12.5px; }
+.form .model-row { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .form .hint .link { margin-left: 6px; }
+.form .warn-text { color: var(--warn); }
 .dhead .meta .runs-with.claude { color: var(--claude); }
 .dhead .meta .runs-with.codex { color: var(--codex); }
+.dhead .meta .runs-with.claude.alt { color: var(--claude-alt); }
+.dhead .meta .runs-with.codex.alt { color: var(--codex-alt); }
 
 /* While an agent works and hasn't started writing, one small line says what it did last. */
 .agent-card .live .last-step {

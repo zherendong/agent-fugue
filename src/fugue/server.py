@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__, engine, transcript
 from .agents import find_binary
-from .store import AGENTS, Discussion, FugueError, list_discussions
+from .store import TOOLS, Discussion, FugueError, list_discussions
 
 STATIC_FILES = {"app.js": "text/javascript", "app.css": "text/css"}
 CONTROL_KEYS = {"paused": bool, "pause_after_each_round": bool, "max_rounds": int}
@@ -62,7 +62,7 @@ def detail(discussion: Discussion) -> dict:
                      "cost_usd", "tokens")}
             item["notes"] = entry.get("notes", [])
             item["forwarded"] = entry.get("forwarded", [])
-            item["heading"] = transcript.entry_heading(rnd["kind"], agent, discussion.labels)
+            item["heading"] = transcript.entry_heading(rnd["kind"], discussion, agent)
             if entry["status"] == "done":
                 item["reply"] = discussion.read_reply(rnd["index"], agent)
             entries[agent] = item
@@ -74,7 +74,14 @@ def detail(discussion: Discussion) -> dict:
         "control": discussion.read_control(),
         "inbox": discussion.read_inbox(),
         "sessions": discussion.state["sessions"],
-        "labels": discussion.labels,
+        "resume": {letter: transcript.resume_command(discussion, letter, session_id)
+                   for letter, session_id in discussion.state["sessions"].items()},
+        # Each member by letter: tool, model, effort, extra arguments, and its name for the user.
+        "members": {letter: {**{key: member.get(key) for key in ("tool", "model", "effort", "args")},
+                             "name": discussion.name(letter), "short_name": discussion.name(letter, with_letter=False)}
+                    for letter, member in discussion.members.items()},
+        # Live events from before members name the tool; this maps them to letters.
+        "legacy_names": discussion.state.get("legacy_names", {}),
         "settings": discussion.state["settings"],
         "transcript_path": str(discussion.transcript_path),
         "rounds": rounds,
@@ -207,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
     def _api(self, method: str, path: str, query: dict) -> None:
         if path == "/api/info" and method == "GET":
             return self._json({"version": __version__, "home": str(Path.home()),
-                               "agents": {a: _has_binary(a) for a in AGENTS}})
+                               "agents": {tool: _has_binary(tool) for tool in TOOLS}})
         if path == "/api/settings":
             from .config import config_path
             from .settings import read_defaults, save_defaults
@@ -248,24 +255,24 @@ class Handler(BaseHTTPRequestHandler):
         if action == "events" and method == "GET":
             return self._events(discussion, query)
         if action == "prompt" and method == "GET":
-            index, agent = int((query.get("round") or ["-1"])[0]), (query.get("agent") or [""])[0]
-            if agent not in AGENTS or not discussion.prompt_path(index, agent).exists():
+            index, letter = int((query.get("round") or ["-1"])[0]), (query.get("member") or [""])[0]
+            if letter not in discussion.members or not discussion.prompt_path(index, letter).exists():
                 return self._error(HTTPStatus.NOT_FOUND, "No such message.")
-            return self._json({"text": discussion.prompt_path(index, agent).read_text()})
+            return self._json({"text": discussion.prompt_path(index, letter).read_text()})
         if action == "notes" and method == "POST":
             body = self._body()
             text, to = str(body.get("text") or "").strip(), body.get("to", "both")
             if not text:
                 raise BadRequest("The note is empty.")
-            if to not in ("both", *AGENTS):
-                raise BadRequest("`to` must be both, claude or codex.")
-            discussion.add_note(text, list(AGENTS) if to == "both" else [to])
+            if to != "both" and to not in discussion.members:
+                raise BadRequest(f"`to` must be both or a member's letter ({', '.join(discussion.members)}).")
+            discussion.add_note(text, list(discussion.members) if to == "both" else [to])
             return self._json({"ok": True})
         if action == "notes" and method == "DELETE":
             body = self._body()
-            if body.get("agent") not in AGENTS:
-                raise BadRequest("Unknown agent.")
-            discussion.remove_note(body["agent"], int(body.get("index", -1)))
+            if body.get("member") not in discussion.members:
+                raise BadRequest("Unknown member.")
+            discussion.remove_note(body["member"], int(body.get("index", -1)))
             return self._json({"ok": True})
         if action == "control" and method == "POST":
             return self._control(discussion, self._body())
@@ -295,15 +302,16 @@ class Handler(BaseHTTPRequestHandler):
         web = body.get("web")
         if web is not None and not isinstance(web, bool):
             raise BadRequest("web must be true or false.")
+        members = body.get("members")
+        if members is not None and (not isinstance(members, list) or not all(isinstance(m, dict) for m in members)):
+            raise BadRequest("members must be a list of {tool, model, effort, args}.")
         discussion = new_discussion(
             str(body.get("question") or ""),
             cwd=Path(text("cwd") or str(self.app.default_cwd)),
             title=text("title"),
             timeout_minutes=float(timeout) if timeout else None,
-            models={"claude": text("claude_model"), "codex": text("codex_model")},
-            efforts={"claude": text("claude_effort"), "codex": text("codex_effort")},
+            members=members,
             web=web,
-            extra_args={"claude": text("claude_args"), "codex": text("codex_args")},
             control=control,
         )
         self.app.kick(discussion.id)

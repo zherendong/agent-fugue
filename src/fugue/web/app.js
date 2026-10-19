@@ -4,8 +4,9 @@
 // the right, updated live from the server's event stream.
 
 const TOKEN = document.querySelector('meta[name="fugue-token"]').content;
+const TOOLS = ['claude', 'codex'];
 const NAMES = { claude: 'Claude', codex: 'Codex' };
-const AGENTS = ['claude', 'codex'];
+const TOOL_LABELS = { claude: 'Claude Code', codex: 'Codex' };
 
 const S = {
   list: [],
@@ -14,7 +15,7 @@ const S = {
   id: null,             // the discussion on screen
   detail: null,
   detailJson: '',
-  live: new Map(),      // "round:agent" -> { activity: [], text, started }
+  live: new Map(),      // "round:member letter" -> { activity: [], text, started }
   source: null,         // EventSource for the discussion on screen
   dirty: new Set(),
   frame: 0,
@@ -390,9 +391,10 @@ async function openDiscussion(id) {
     S.follow = false;
     $('#content').replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
     drawList();
-    connect(id);
   }
   await refreshDetail();
+  // The stream starts once the members are known: old events name the tool, not the letter.
+  if (S.id === id && !S.source) connect(id);
   if (S.detail && S.detail.status.phase === 'running') {
     S.follow = true;
     scrollToBottom();
@@ -417,8 +419,15 @@ function liveEntry(key) {
   return S.live.get(key);
 }
 
+// Which member an event is about. Events from before members name the tool instead.
+function eventMember(ev) {
+  if (ev.member) return ev.member;
+  const legacy = S.detail && S.detail.legacy_names;
+  return (legacy && legacy[ev.agent]) || ev.agent;
+}
+
 function onEvent(ev) {
-  const key = `${ev.round}:${ev.agent}`;
+  const key = `${ev.round}:${eventMember(ev)}`;
   switch (ev.type) {
     case 'agent_started':
       S.live.set(key, { activity: [], text: '', started: ev.t, thinking: 0, last: 'start' });
@@ -465,8 +474,8 @@ function markDirty(key) {
 function flushDirty() {
   S.frame = 0;
   for (const key of S.dirty) {
-    const [round, agent] = key.split(':');
-    patchCard(round, agent);
+    const [round, letter] = key.split(':');
+    patchCard(round, letter);
   }
   S.dirty.clear();
   if (S.follow) scrollToBottom();
@@ -513,8 +522,9 @@ function drawDiscussion() {
       el('div', { class: 'md', html: md(d.question) })),
     d.rounds.map(roundSection),
     d.rounds.length ? null : el('p', { class: 'muted' }, 'Starting…')));
-  for (const r of d.rounds) for (const agent of Object.keys(r.entries)) patchCard(r.index, agent);
+  for (const r of d.rounds) for (const letter of Object.keys(r.entries)) patchCard(r.index, letter);
   drawPending(d);
+  drawModes(d);
   $('#composer').hidden = false;
   if (S.follow) scrollToBottom();
   else main.scrollTop = scroll;
@@ -527,8 +537,8 @@ function header(d) {
   return el('header', { class: 'dhead' },
     el('h1', {}, d.title),
     el('div', { class: 'meta' },
-      el('code', { title: 'Folder the agents work in' }, tilde(d.cwd)),
-      AGENTS.map((agent) => el('span', { class: `runs-with ${agent}` }, runsWith(d, agent))),
+      el('code', { title: 'Folder the members work in' }, tilde(d.cwd)),
+      letters(d).map((letter) => el('span', { class: `runs-with ${memberClass(d, letter)}` }, runsWith(d, letter))),
       el('span', {}, d.settings.web === false ? 'no web access' : 'web access for both'),
       el('span', {}, `started ${ago(d.created_at)}`),
       el('span', {}, d.id),
@@ -548,16 +558,39 @@ function header(d) {
     planControls(d));
 }
 
-function runsWith(d, agent) {
-  const chosen = d.settings[agent] || {};
-  const model = chosen.model ? modelName(agent, chosen.model) : 'default model';
-  const letter = d.labels && d.labels[agent] ? ` (member ${d.labels[agent]})` : '';
-  return `${NAMES[agent]}${letter}: ${model}, ${chosen.effort ? `effort ${chosen.effort}` : 'default effort'}`;
+// ---------------------------------------------------------------- members
+// A discussion's members by letter (A, B): each has a tool, model, effort and
+// extra arguments, and a name from the server such as "Claude (member A)".
+
+function letters(d) {
+  return Object.keys(d.members);
+}
+
+function otherLetter(d, letter) {
+  return letters(d).find((other) => other !== letter);
+}
+
+// The other member as the card for `letter` mentions them: with the letter when the two names match.
+function otherName(d, letter) {
+  const other = d.members[otherLetter(d, letter)];
+  return other.short_name === d.members[letter].short_name ? other.name : other.short_name;
+}
+
+// Cards take their tool's colour; when both members use the same tool, the second gets another shade.
+function memberClass(d, letter) {
+  const tool = d.members[letter].tool;
+  return letters(d).find((other) => d.members[other].tool === tool) === letter ? tool : `${tool} alt`;
+}
+
+function runsWith(d, letter) {
+  const m = d.members[letter];
+  const model = m.model ? modelName(m.tool, m.model) : 'default model';
+  return `${NAMES[m.tool]} (member ${letter}): ${model}, ${m.effort ? `effort ${m.effort}` : 'default effort'}`;
 }
 
 async function deleteDiscussion(d) {
   const sure = window.confirm(`Move "${d.title}" to the Trash?\n\nYou can restore it from the Trash in Finder. `
-    + "Claude's and Codex's own sessions are kept.");
+    + "The members' own Claude and Codex sessions are kept.");
   if (!sure) return;
   if (!(await attempt(() => api('DELETE', path())))) return;
   toast('Moved to the Trash.');
@@ -567,23 +600,11 @@ async function deleteDiscussion(d) {
 }
 
 function resumeLinks(d) {
-  const quote = (path) => `'${path.replace(/'/g, "'\\''")}'`;
-  const links = [];
-  if (d.sessions.claude) {
-    links.push(el('button', {
-      class: 'link',
-      title: 'Copies a command that opens this Claude session in your terminal',
-      onclick: () => copy(`cd ${quote(d.cwd)} && claude --resume ${d.sessions.claude}`),
-    }, 'Copy Claude resume command'));
-  }
-  if (d.sessions.codex) {
-    links.push(el('button', {
-      class: 'link',
-      title: 'Copies a command that opens this Codex session in your terminal',
-      onclick: () => copy(`cd ${quote(d.cwd)} && codex resume ${d.sessions.codex}`),
-    }, 'Copy Codex resume command'));
-  }
-  return links;
+  return letters(d).filter((letter) => d.resume[letter]).map((letter) => el('button', {
+    class: 'link',
+    title: `Copies a command that opens ${d.members[letter].name}'s session in your terminal, with its memory of this discussion`,
+    onclick: () => copy(d.resume[letter]),
+  }, `Copy resume command for member ${letter}`));
 }
 
 function button(text, onclick, kind = '') {
@@ -661,35 +682,35 @@ const ROUND_TITLES = {
 };
 
 function roundSection(r) {
-  const agents = AGENTS.filter((a) => r.entries[a]);
+  const shown = letters(S.detail).filter((letter) => r.entries[letter]);
   const title = r.kind === 'answer' && r.index > 0 ? 'Follow-up question, independent answers' : ROUND_TITLES[r.kind];
   return el('section', { class: 'round', id: `round-${r.index}` },
     el('h2', {}, el('span', { class: 'num' }, `Round ${r.index}`), title, tally(r)),
     r.kind === 'answer' && r.index > 0
       ? el('div', { class: 'followup' }, el('div', { class: 'section-label' }, 'Your follow-up'), el('div', { class: 'md', html: md(r.question) }))
       : null,
-    el('div', { class: `pair${agents.length === 1 ? ' single' : ''}` }, agents.map((a) => card(r, a))));
+    el('div', { class: `pair${shown.length === 1 ? ' single' : ''}` }, shown.map((letter) => card(r, letter))));
 }
 
 function tally(r) {
-  const done = AGENTS.filter((a) => r.entries[a] && r.entries[a].status === 'done');
+  const done = letters(S.detail).filter((letter) => r.entries[letter] && r.entries[letter].status === 'done');
   if (done.length < 2) return null;
   if (r.kind === 'comment') {
-    if (done.every((a) => r.entries[a].objections === 0)) {
+    if (done.every((letter) => r.entries[letter].objections === 0)) {
       return el('span', { class: 'tally ok' }, 'No objections on either side: they agree');
     }
     return el('span', { class: 'tally' },
-      `Objections: ${done.map((a) => `${NAMES[a]} ${r.entries[a].objections ?? '?'}`).join(' · ')}`);
+      `Objections: ${done.map((letter) => `member ${letter} ${r.entries[letter].objections ?? '?'}`).join(' · ')}`);
   }
   if (r.kind === 'review' || r.kind === 'discuss') {
     return el('span', { class: 'tally' },
-      `Disagreements left: ${done.map((a) => `${NAMES[a]} ${r.entries[a].remaining ?? '?'}`).join(' · ')}`);
+      `Disagreements left: ${done.map((letter) => `member ${letter} ${r.entries[letter].remaining ?? '?'}`).join(' · ')}`);
   }
   return null;
 }
 
-function subtitle(kind, agent, index) {
-  const other = NAMES[agent === 'claude' ? 'codex' : 'claude'];
+function subtitle(kind, letter, index) {
+  const other = otherName(S.detail, letter);
   return {
     answer: index > 0 ? 'its own answer to the follow-up' : 'its own answer',
     comment: `commenting on ${other}'s answer`,
@@ -719,13 +740,14 @@ function stateText(e) {
   return 'waiting';
 }
 
-function card(r, agent) {
-  const e = r.entries[agent];
-  const key = `${r.index}:${agent}`;
+function card(r, letter) {
+  const d = S.detail;
+  const e = r.entries[letter];
+  const key = `${r.index}:${letter}`;
   const running = e.status === 'running';
   const open = S.activityOpen.has(key) ? S.activityOpen.get(key) : running;
   // Remember only what the user opens or closes; a card opens its activity
-  // while the agent works and closes it once the reply is in.
+  // while the member works and closes it once the reply is in.
   const activity = el('details', { class: 'activity', open },
     el('summary', { onclick: () => S.activityOpen.set(key, !activity.open) }, 'Activity'), el('ol'));
   let body = null;
@@ -736,18 +758,18 @@ function card(r, agent) {
       e.error === 'stopped' || e.error === 'interrupted' ? 'Stopped before it finished.' : `Failed: ${e.error}`);
   } else body = el('div', { class: 'waiting muted' }, 'Waiting to start.');
   return el('article', {
-    class: `agent-card ${agent} status-${e.status}`,
-    id: `card-${r.index}-${agent}`,
-    dataset: { round: r.index, agent },
+    class: `agent-card ${memberClass(d, letter)} status-${e.status}`,
+    id: `card-${r.index}-${letter}`,
+    dataset: { round: r.index, member: letter },
   },
   el('header', {},
-    el('span', { class: 'agent-name' }, NAMES[agent]),
-    S.detail && S.detail.labels ? el('span', { class: 'member-letter', title: 'The letter the members know each other by' }, `member ${S.detail.labels[agent]}`) : null,
-    el('span', { class: 'sub' }, subtitle(r.kind, agent, r.index)),
+    el('span', { class: 'agent-name', title: runsWith(d, letter) }, d.members[letter].short_name),
+    el('span', { class: 'member-letter', title: 'The letter the members know each other by' }, `member ${letter}`),
+    el('span', { class: 'sub' }, subtitle(r.kind, letter, r.index)),
     el('span', { class: 'state' }, stateText(e))),
   e.notes.length
     ? el('div', { class: 'notes' }, e.notes.map((n) => el('div', { class: 'note' },
-      el('div', { class: 'label' }, n.shared ? 'Your note to both' : `Your note to ${NAMES[agent]}`),
+      el('div', { class: 'label' }, n.shared ? 'Your note to both' : `Your note to member ${letter}`),
       el('div', { class: 'md', html: md(n.text) }))))
     : null,
   activity,
@@ -755,18 +777,18 @@ function card(r, agent) {
   el('footer', {},
     countBadge(e),
     el('span', { class: 'spacer' }),
-    el('button', { class: 'link', type: 'button', onclick: () => showPrompt(r.index, agent) }, 'What fugue sent'),
+    el('button', { class: 'link', type: 'button', onclick: () => showPrompt(r.index, letter) }, 'What fugue sent'),
     e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy reply') : null));
 }
 
-function patchCard(round, agent) {
-  const node = document.getElementById(`card-${round}-${agent}`);
+function patchCard(round, letter) {
+  const node = document.getElementById(`card-${round}-${letter}`);
   if (!node) return;
-  const live = S.live.get(`${round}:${agent}`);
+  const live = S.live.get(`${round}:${letter}`);
   const running = node.classList.contains('status-running');
   let items = live ? live.activity : [];
   // The reply is shown in full below, so don't repeat it as the last step.
-  const entry = S.detail && S.detail.rounds[Number(round)] && S.detail.rounds[Number(round)].entries[agent];
+  const entry = S.detail && S.detail.rounds[Number(round)] && S.detail.rounds[Number(round)].entries[letter];
   const last = items[items.length - 1];
   if (entry && entry.reply && last && last.kind === 'message' && last.text === firstLine(entry.reply)) {
     items = items.slice(0, -1);
@@ -802,18 +824,18 @@ function patchCard(round, agent) {
 function tick() {
   if (!S.detail) return;
   for (const node of document.querySelectorAll('.agent-card.status-running')) {
-    const { round, agent } = node.dataset;
-    const live = S.live.get(`${round}:${agent}`);
-    const entry = S.detail.rounds[Number(round)] && S.detail.rounds[Number(round)].entries[agent];
+    const { round, member } = node.dataset;
+    const live = S.live.get(`${round}:${member}`);
+    const entry = S.detail.rounds[Number(round)] && S.detail.rounds[Number(round)].entries[member];
     const start = (live && live.started) || parseTime(entry && entry.started_at);
     if (start) node.querySelector('header .state').textContent = `working ${fmtDuration(Date.now() / 1000 - start)}`;
   }
 }
 
-async function showPrompt(round, agent) {
-  const data = await attempt(() => api('GET', `${path('prompt')}?round=${round}&agent=${agent}`));
+async function showPrompt(round, letter) {
+  const data = await attempt(() => api('GET', `${path('prompt')}?round=${round}&member=${letter}`));
   if (!data) return;
-  $('#prompt-title').textContent = `What fugue sent to ${NAMES[agent]} in round ${round}`;
+  $('#prompt-title').textContent = `What fugue sent to ${S.detail.members[letter].name} in round ${round}`;
   $('#prompt-text').textContent = data.text;
   $('#prompt-copy').onclick = () => copy(data.text);
   $('#prompt-dialog').showModal();
@@ -821,18 +843,42 @@ async function showPrompt(round, agent) {
 
 // ---------------------------------------------------------------- notes, follow-ups, queue
 
-const MODES = {
-  both: { placeholder: 'Add your view, a correction, or something to check…', hint: 'Goes into the next message to both agents.' },
-  claude: { placeholder: 'Something only Claude should hear…', hint: 'Goes into the next message to Claude only.' },
-  codex: { placeholder: 'Something only Codex should hear…', hint: 'Goes into the next message to Codex only.' },
-  ask: { placeholder: 'Ask a follow-up question…', hint: 'Asked once the current round is done. Each agent answers on its own first.' },
-};
+function modes(d) {
+  const all = { both: { button: 'Note to both', placeholder: 'Add your view, a correction, or something to check…', hint: 'Goes into the next message to both members.' } };
+  for (const letter of letters(d)) {
+    all[letter] = {
+      button: `Note to member ${letter}`,
+      title: d.members[letter].name,
+      placeholder: `Something only ${d.members[letter].name} should hear…`,
+      hint: `Goes into the next message to ${d.members[letter].name} only.`,
+    };
+  }
+  all.ask = { button: 'Follow-up question', placeholder: 'Ask a follow-up question…', hint: 'Asked once the current round is done. Each member answers on its own first.' };
+  return all;
+}
+
+function drawModes(d) {
+  const all = modes(d);
+  const group = $('.modes');
+  const wanted = Object.keys(all).join(' ');
+  if (group.dataset.modes !== wanted) {
+    group.dataset.modes = wanted;
+    group.replaceChildren(...Object.entries(all).map(([mode, m]) => el('button', {
+      type: 'button',
+      dataset: { mode },
+      title: m.title,
+      onclick: () => setMode(mode),
+    }, m.button)));
+  }
+  setMode(all[S.mode] ? S.mode : 'both');
+}
 
 function setMode(mode) {
+  const m = modes(S.detail)[mode];
   S.mode = mode;
   for (const b of document.querySelectorAll('.modes button')) b.classList.toggle('on', b.dataset.mode === mode);
-  $('#composer-text').placeholder = MODES[mode].placeholder;
-  $('#composer-hint').textContent = `${MODES[mode].hint} ⌘↩ sends.`;
+  $('#composer-text').placeholder = m.placeholder;
+  $('#composer-hint').textContent = `${m.hint} ⌘↩ sends.`;
 }
 
 async function send() {
@@ -854,16 +900,16 @@ async function send() {
 function drawPending(d) {
   const chips = [];
   const seen = new Set();
-  for (const agent of AGENTS) {
-    (d.inbox.notes[agent] || []).forEach((note, index) => {
+  for (const letter of letters(d)) {
+    (d.inbox.notes[letter] || []).forEach((note, index) => {
       if (note.shared && seen.has(note.text)) return;
       if (note.shared) seen.add(note.text);
       chips.push(el('span', { class: 'chip', title: note.text },
-        el('span', { class: 'text' }, `${note.shared ? 'Note to both' : `Note to ${NAMES[agent]}`}: ${note.text}`),
+        el('span', { class: 'text' }, `${note.shared ? 'Note to both' : `Note to member ${letter}`}: ${note.text}`),
         el('button', {
           type: 'button',
           title: 'Withdraw this note',
-          onclick: () => attempt(async () => { await api('DELETE', path('notes'), { agent, index }); refreshSoon(); }),
+          onclick: () => attempt(async () => { await api('DELETE', path('notes'), { member: letter, index }); refreshSoon(); }),
         }, '×')));
     });
   }
@@ -896,32 +942,30 @@ async function loadModels(refresh = false) {
   return S.models;
 }
 
-function findModel(agent, id) {
-  const entry = S.models && S.models[agent];
+function findModel(tool, id) {
+  const entry = S.models && S.models[tool];
   if (!entry || !id) return null;
   let base = String(id).trim().replace(/\[[^\]]*\]$/, '');
-  if (agent === 'claude') base = CLAUDE_ALIASES[base] || base;
+  if (tool === 'claude') base = CLAUDE_ALIASES[base] || base;
   return entry.models.find((m) => m.id === base) || null;
 }
 
-function modelName(agent, id) {
-  const model = findModel(agent, id);
+function modelName(tool, id) {
+  const model = findModel(tool, id);
   if (!model) return id;
   const suffix = String(id).match(/\[[^\]]*\]$/);
   return suffix ? `${model.name} ${suffix[0]}` : model.name;
 }
 
-function defaultModelLabel(agent, savedDefault) {
-  if (savedDefault && savedDefault.model) return `Default: ${modelName(agent, savedDefault.model)}`;
-  const own = S.models && S.models[agent].defaults.model;
-  return own ? `Default: ${modelName(agent, own)}` : `Default: ${NAMES[agent]}'s own choice`;
+function defaultModelLabel(tool) {
+  const own = S.models && S.models[tool].defaults.model;
+  return own ? `Default: ${modelName(tool, own)}` : `Default: ${NAMES[tool]}'s own choice`;
 }
 
-function defaultEffortLabel(agent, modelId, savedDefault) {
-  if (savedDefault && savedDefault.effort) return `Default: ${savedDefault.effort}`;
-  const entry = S.models && S.models[agent];
+function defaultEffortLabel(tool, modelId) {
+  const entry = S.models && S.models[tool];
   const own = entry && entry.defaults.effort;
-  if (agent === 'codex') {
+  if (tool === 'codex') {
     if (own) return `Default: ${own}, from your Codex config`;
     const model = findModel('codex', modelId || (entry && entry.defaults.model));
     return model && model.default_effort ? `Default: ${model.default_effort}` : 'Default';
@@ -934,37 +978,61 @@ function allLevels(models) {
   return EFFORT_ORDER.filter((level) => levels.has(level));
 }
 
-// `savedDefault` is the user's default from Settings, which "Default" stands for on the
-// New question form; on the Settings page itself "Default" means the tool's own choice.
-function modelPicker(agent, chosen, savedDefault = null) {
-  const entry = S.models[agent];
+// One member's controls: the tool, then that tool's models and effort levels,
+// then extra arguments. `onchange` runs whenever any of them changes.
+function memberRow(index, chosen, onchange) {
+  const row = el('div', { class: 'member-row', dataset: { index } });
+  const tool = el('select', { 'aria-label': `Member ${index + 1}'s tool`, class: 'tool' },
+    TOOLS.map((t) => el('option', { value: t, selected: t === chosen.tool }, TOOL_LABELS[t])));
+  const picker = el('span', { class: 'picker' });
+  const args = el('input', { type: 'text', class: 'args', value: chosen.args || '', spellcheck: 'false' });
+  const drawPicker = (current) => {
+    const t = tool.value;
+    args.placeholder = `extra arguments for ${t === 'claude' ? 'claude -p' : 'codex exec'}, e.g. --add-dir ../shared`;
+    picker.replaceChildren(S.models ? modelPicker(t, current) : el('span', { class: 'muted' }, 'default model and effort'));
+  };
+  tool.addEventListener('change', () => { drawPicker({}); onchange(); });
+  row.addEventListener('change', onchange);
+  row.addEventListener('input', onchange);
+  drawPicker(chosen);
+  row.append(el('span', { class: 'member-num' }, `Member ${index + 1}`), el('div', { class: 'member-body' }, tool, picker, args));
+  row.read = () => {
+    const modelChoice = row.querySelector('select.model');
+    const model = !modelChoice ? chosen.model || ''
+      : modelChoice.value === '__other' ? row.querySelector('input.model-other').value.trim() : modelChoice.value;
+    const effortChoice = row.querySelector('select.effort');
+    return { tool: tool.value, model, effort: effortChoice ? effortChoice.value : chosen.effort || '', args: args.value.trim() };
+  };
+  return row;
+}
+
+function modelPicker(tool, chosen) {
+  const entry = S.models[tool];
   const models = entry.models;
-  const chosenModel = chosen.model || '';
+  const chosenModel = (chosen.tool === undefined || chosen.tool === tool) ? chosen.model || '' : '';
   const listed = !chosenModel || models.some((m) => m.id === chosenModel);
-  const modelSelect = el('select', { name: `${agent}_model_choice`, 'aria-label': `${NAMES[agent]} model` },
-    el('option', { value: '' }, defaultModelLabel(agent, savedDefault)),
+  const modelSelect = el('select', { class: 'model', 'aria-label': `${NAMES[tool]} model` },
+    el('option', { value: '' }, defaultModelLabel(tool)),
     models.map((m) => el('option', { value: m.id, selected: m.id === chosenModel, title: m.description || m.id }, m.name)),
     el('option', { value: '__other', selected: !listed }, 'Other model id…'));
   const other = el('input', {
     type: 'text',
-    name: `${agent}_model_other`,
+    class: 'model-other',
     value: listed ? '' : chosenModel,
     placeholder: 'model id',
     spellcheck: 'false',
     hidden: listed,
   });
-  const effortSelect = el('select', { name: `${agent}_effort`, 'aria-label': `${NAMES[agent]} effort` });
+  const effortSelect = el('select', { class: 'effort', 'aria-label': `${NAMES[tool]} effort` });
   let wanted = chosen.effort || '';
   const fill = () => {
     other.hidden = modelSelect.value !== '__other';
-    const id = modelSelect.value === '__other'
-      ? other.value
-      : (modelSelect.value || (savedDefault && savedDefault.model) || entry.defaults.model);
-    const model = findModel(agent, id);
+    const id = modelSelect.value === '__other' ? other.value : (modelSelect.value || entry.defaults.model);
+    const model = findModel(tool, id);
     // Only offer the levels this model accepts; keep the choice when it still fits.
     const levels = model ? model.efforts : allLevels(models);
     effortSelect.replaceChildren(
-      el('option', { value: '' }, defaultEffortLabel(agent, id, savedDefault)),
+      el('option', { value: '' }, defaultEffortLabel(tool, id)),
       ...levels.map((level) => el('option', { value: level }, level)));
     effortSelect.value = levels.includes(wanted) ? wanted : '';
   };
@@ -972,33 +1040,50 @@ function modelPicker(agent, chosen, savedDefault = null) {
   other.addEventListener('input', fill);
   effortSelect.addEventListener('change', () => { wanted = effortSelect.value; });
   fill();
-  return el('div', { class: `model-row ${agent}` },
-    el('span', { class: 'agent-name' }, NAMES[agent]),
-    modelSelect,
-    other,
-    el('span', { class: 'muted' }, 'effort'),
-    effortSelect);
+  return el('span', { class: 'model-row' }, modelSelect, other, el('span', { class: 'muted' }, 'effort'), effortSelect);
 }
 
-function pickedModels(form) {
-  const data = new FormData(form);
-  const picked = {};
-  for (const agent of AGENTS) {
-    const choice = data.get(`${agent}_model_choice`);
-    if (choice === null) continue; // the pickers haven't loaded
-    const model = choice === '__other' ? String(data.get(`${agent}_model_other`) || '').trim() : choice;
-    picked[agent] = { model, effort: data.get(`${agent}_effort`) || '' };
+// The two member rows, with a hint under them, for the New question form and Settings.
+function membersField(chosen) {
+  const hint = el('div', { class: 'hint' });
+  const warning = el('div', { class: 'hint warn-text' });
+  const rows = [];
+  const update = () => {
+    const [a, b] = rows.map((row) => row.read());
+    const sameModel = a.tool === b.tool && (a.model || '') === (b.model || '');
+    warning.textContent = sameModel
+      ? 'Both members run the same model, so they tend to share blind spots and miss the same things. '
+        + 'Different models, or at least different efforts, catch more of each other\'s mistakes.'
+      : '';
+    warning.hidden = !sameModel;
+  };
+  const lineup = chosen.length === 2 ? chosen : [{ tool: 'claude' }, { tool: 'codex' }];
+  lineup.forEach((member, index) => rows.push(memberRow(index, member, update)));
+  update();
+  if (S.models) {
+    const codex = S.models.codex;
+    const when = codex.checked_at ? ` on ${new Date(codex.checked_at * 1000).toLocaleString()}` : '';
+    hint.replaceChildren(
+      'Each member is Claude Code or Codex; both can be the same tool. They know each other only as member A and B, '
+      + 'and the letters are drawn at random when the discussion starts. '
+      + `Default means fugue passes nothing, so the tool uses its own settings. Codex's models come from ${codex.source}${when}; `
+      + "Claude's list is built into fugue. ",
+      el('button', {
+        class: 'link',
+        type: 'button',
+        onclick: async () => {
+          const current = rows.map((row) => row.read());
+          box.replaceChildren(el('span', { class: 'muted' }, 'Asking Codex for its models…'));
+          await loadModels(true);
+          box.replaceWith(membersField(current));
+        },
+      }, 'Ask Codex again'));
+  } else {
+    hint.textContent = "Couldn't load the model lists; members whose model you don't set use their tool's default.";
   }
-  return picked;
-}
-
-function modelsHint(onSettingsPage = false) {
-  const codex = S.models.codex;
-  const when = codex.checked_at ? ` on ${new Date(codex.checked_at * 1000).toLocaleString()}` : '';
-  const meaning = onSettingsPage
-    ? 'Default here means fugue passes nothing, so each tool uses its own settings.'
-    : 'Default means your defaults from Settings, or each tool\'s own settings where you set none.';
-  return `Codex's list comes from ${codex.source}${when}; Claude's is built into fugue. ${meaning}`;
+  const box = el('div', { class: 'members' }, rows, warning, hint);
+  box.read = () => rows.map((row) => row.read());
+  return box;
 }
 
 // ---------------------------------------------------------------- new question
@@ -1013,34 +1098,17 @@ async function showNewQuestion() {
   ]);
   const defaults = settings ? settings.defaults : null;
   const saved = prefs();
-  const missing = AGENTS.filter((a) => S.info && !S.info.agents[a]);
+  const missing = TOOLS.filter((t) => S.info && !S.info.agents[t]);
   const cwdDefault = saved.cwd || folders.recent[0] || folders.default;
-  // Everything but the folder starts from the defaults on the Settings page.
+  // Everything but the folder starts from the defaults on the Settings page,
+  // including the members, so what the form shows is what runs.
   const rounds = defaults ? defaults.max_rounds : 2;
-  const pickers = el('div', { class: 'models' }, el('span', { class: 'muted' }, 'Loading the model lists…'));
-  const pickersHint = el('div', { class: 'hint' });
-  const drawPickers = (chosen) => {
-    if (!S.models) {
-      pickers.replaceChildren(el('span', { class: 'muted' }, "Couldn't load the model lists; each agent will use its default."));
-      return;
-    }
-    pickers.replaceChildren(...AGENTS.map((a) => modelPicker(a, chosen[a] || {}, defaults && defaults[a])));
-    pickersHint.replaceChildren(modelsHint(), el('button', {
-      class: 'link',
-      type: 'button',
-      onclick: async () => {
-        const current = pickedModels(form);
-        pickers.replaceChildren(el('span', { class: 'muted' }, 'Asking Codex for its models…'));
-        await loadModels(true);
-        drawPickers(current);
-      },
-    }, 'Ask Codex again'));
-  };
+  const membersSlot = el('div', {}, el('span', { class: 'muted' }, 'Loading the model lists…'));
 
   const form = el('form', { class: 'form', onsubmit: (e) => { e.preventDefault(); start(form); } },
     el('h1', {}, 'New question'),
     missing.length
-      ? el('div', { class: 'warning' }, `The server can't find the ${missing.join(' and ')} command on its PATH.`)
+      ? el('div', { class: 'warning' }, `The server can't find the ${missing.join(' and ')} command on its PATH, so members can't use it.`)
       : null,
     el('div', { class: 'field' },
       el('label', { for: 'q' }, 'Question'),
@@ -1049,11 +1117,11 @@ async function showNewQuestion() {
         name: 'question',
         rows: 9,
         required: true,
-        placeholder: 'Both agents get exactly this, and each answers on its own first.',
+        placeholder: 'Both members get exactly this, and each answers on its own first.',
         onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
       })),
     el('div', { class: 'field' },
-      el('label', { for: 'cwd' }, 'Folder the agents work in'),
+      el('label', { for: 'cwd' }, 'Folder the members work in'),
       el('input', { id: 'cwd', name: 'cwd', type: 'text', list: 'folders', value: cwdDefault, required: true, spellcheck: 'false' }),
       el('datalist', { id: 'folders' }, [...new Set([...folders.recent, folders.default])].map((f) => el('option', { value: f }))),
       el('div', { class: 'hint' }, 'They can read everything in it and run read-only commands, but not change files.')),
@@ -1070,20 +1138,12 @@ async function showNewQuestion() {
         + 'It stops earlier once neither has objections. With pausing on, you move it on yourself after every round. '
         + 'You can change all of this while it runs.')),
     el('div', { class: 'field' },
-      el('div', { class: 'label' }, 'Models'),
-      pickers,
-      pickersHint),
+      el('div', { class: 'label' }, 'Members'),
+      membersSlot),
     el('details', {},
-      el('summary', {}, 'Extra arguments and time limit'),
+      el('summary', {}, 'Time limit'),
       el('div', { class: 'grid' },
-        AGENTS.map((a) => el('label', {}, `More arguments for ${a === 'claude' ? 'claude -p' : 'codex exec'}`,
-          el('input', {
-            type: 'text',
-            name: `${a}_args`,
-            spellcheck: 'false',
-            placeholder: defaults && defaults[a].args ? `after your defaults: ${defaults[a].args}` : '--add-dir ../shared',
-          }))),
-        el('label', {}, 'Give up on an agent after (minutes)',
+        el('label', {}, 'Give up on a member after (minutes)',
           el('input', { type: 'text', name: 'timeout', placeholder: String(defaults ? defaults.timeout_minutes : 30) })))),
     el('div', { class: 'submit' },
       el('button', { class: 'btn primary', type: 'submit' }, 'Ask both'),
@@ -1092,15 +1152,15 @@ async function showNewQuestion() {
   $('#main').scrollTop = 0;
   $('#q').focus();
   await loadModels();
-  drawPickers({});
+  const members = membersField(defaults ? defaults.members : []);
+  membersSlot.replaceChildren(members);
+  form.members = members;
 }
 
 async function start(form) {
   const data = Object.fromEntries(new FormData(form));
   const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
-  const picked = pickedModels(form);
-  const pick = (agent, key) => (picked[agent] ? picked[agent][key] : undefined);
   prefs({ cwd: data.cwd });
   const created = await attempt(() => api('POST', '/api/discussions', {
     question: data.question,
@@ -1108,12 +1168,7 @@ async function start(form) {
     max_rounds: Number(data.max_rounds),
     pause_after_each_round: data.pause === 'on',
     web: data.web === 'on',
-    claude_model: pick('claude', 'model'),
-    claude_effort: pick('claude', 'effort'),
-    codex_model: pick('codex', 'model'),
-    codex_effort: pick('codex', 'effort'),
-    claude_args: data.claude_args,
-    codex_args: data.codex_args,
+    members: form.members ? form.members.read() : null,
     timeout_minutes: data.timeout ? Number(data.timeout) : null,
   }));
   submit.disabled = false;
@@ -1135,8 +1190,7 @@ async function showSettings() {
     return;
   }
   const d = settings.defaults;
-  const pickers = el('div', { class: 'models' },
-    S.models ? AGENTS.map((a) => modelPicker(a, d[a])) : el('span', { class: 'muted' }, "Couldn't load the model lists."));
+  const members = membersField(d.members);
   const statusBox = el('div', { class: 'status-box' });
   const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, d.max_rounds])].sort((a, b) => a - b);
   const form = el('form', { class: 'form settings', onsubmit: (e) => { e.preventDefault(); saveSettings(form); } },
@@ -1151,17 +1205,14 @@ async function showSettings() {
           el('select', { name: 'max_rounds' }, counts.map((n) => el('option', { value: n, selected: n === d.max_rounds }, n)))),
         el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: d.pause_after_each_round }), 'Pause after each round'),
         el('label', {}, el('input', { type: 'checkbox', name: 'web', checked: d.web }), 'Members may use the web'),
-        el('label', {}, 'Give up on an agent after',
+        el('label', {}, 'Give up on a member after',
           el('input', { type: 'text', name: 'timeout', value: d.timeout_minutes, class: 'short' }), 'minutes'))),
-    el('div', { class: 'field' }, el('div', { class: 'label' }, 'Models'), pickers,
-      S.models ? el('div', { class: 'hint' }, modelsHint(true)) : null),
-    el('div', { class: 'field' },
-      el('div', { class: 'grid' }, AGENTS.map((a) => el('label', {}, `Extra arguments for ${a === 'claude' ? 'claude -p' : 'codex exec'}`,
-        el('input', { type: 'text', name: `${a}_args`, value: d[a].args, spellcheck: 'false' }))))),
+    el('div', { class: 'field' }, el('div', { class: 'label' }, 'Members'), members),
     el('div', { class: 'submit' }, el('button', { class: 'btn primary', type: 'submit' }, 'Save defaults')),
     el('h2', {}, 'Status'),
     statusBox,
     el('div', { class: 'submit' }, el('button', { class: 'btn small', type: 'button', onclick: () => drawStatus(statusBox) }, 'Check again')));
+  form.members = members;
   $('#content').replaceChildren(form);
   $('#main').scrollTop = 0;
   drawStatus(statusBox);
@@ -1169,16 +1220,13 @@ async function showSettings() {
 
 async function saveSettings(form) {
   const data = Object.fromEntries(new FormData(form));
-  const picked = pickedModels(form);
   const body = {
     max_rounds: Number(data.max_rounds),
     pause_after_each_round: data.pause === 'on',
     web: data.web === 'on',
     timeout_minutes: Number(data.timeout),
+    members: form.members.read(),
   };
-  for (const a of AGENTS) {
-    body[a] = { model: (picked[a] && picked[a].model) || '', effort: (picked[a] && picked[a].effort) || '', args: data[`${a}_args`] || '' };
-  }
   if (await attempt(() => api('POST', '/api/settings', body))) toast('Defaults saved.');
 }
 
@@ -1191,10 +1239,10 @@ async function drawStatus(box) {
   }
   const dot = (state) => el('span', { class: `dot phase-${{ good: 'finished', warn: 'paused', bad: 'stopped' }[state]}` });
   const row = (state, label, ...value) => el('div', { class: 'status-line' }, dot(state), el('span', { class: 'status-label' }, label), el('span', {}, ...value));
-  const agentRow = (a) => {
-    const x = s.agents[a];
-    if (!x.found) return row('bad', NAMES[a], x.problem);
-    return row(x.logged_in ? 'good' : 'bad', NAMES[a], `${x.version} · ${x.login} · `, el('code', {}, tilde(x.path)));
+  const toolRow = (t) => {
+    const x = s.agents[t];
+    if (!x.found) return row('bad', TOOL_LABELS[t], x.problem);
+    return row(x.logged_in ? 'good' : 'bad', TOOL_LABELS[t], `${x.version} · ${x.login} · `, el('code', {}, tilde(x.path)));
   };
   const off = s.codex_switched_off;
   const short = (name) => name.split('@')[0];
@@ -1202,8 +1250,7 @@ async function drawStatus(box) {
   if (off.plugins.length) offList.push(`${plural(off.plugins.length, 'plugin')} (${off.plugins.map(short).join(', ')})`);
   if (off.mcp_servers.length) offList.push(`the ${off.mcp_servers.join(', ')} ${off.mcp_servers.length === 1 ? 'server' : 'servers'}`);
   box.replaceChildren(
-    agentRow('claude'),
-    agentRow('codex'),
+    TOOLS.map(toolRow),
     row('good', 'Codex extras',
       el('div', {}, `Off whenever Codex takes part in a discussion: ${offList.join(', ')}.`),
       el('div', { class: 'muted' }, "They could change files or act in your accounts, which Codex's read-only sandbox doesn't "
@@ -1216,8 +1263,6 @@ async function drawStatus(box) {
 // ---------------------------------------------------------------- start up
 
 function init() {
-  for (const b of document.querySelectorAll('.modes button')) b.addEventListener('click', () => setMode(b.dataset.mode));
-  setMode('both');
   $('#composer-send').addEventListener('click', send);
   $('#composer-text').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {

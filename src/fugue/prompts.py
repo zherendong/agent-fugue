@@ -24,8 +24,6 @@ the other member's.
 
 from __future__ import annotations
 
-NAMES = {"claude": "Claude", "codex": "Codex"}  # for the user's eyes only, never sent to a member
-
 # How a forwarded reply is wrapped, by the kind of round it came from. The
 # kinds "review", "discuss" and "final" are from discussions made by earlier
 # versions of fugue.

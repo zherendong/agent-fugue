@@ -50,7 +50,7 @@ if os.environ.get("FAKE_CODEX_FAIL") == "1":
     sys.exit(1)
 
 remaining = os.environ.get("FAKE_OBJECTIONS", "1")
-reply = f"Codex reply number {calls}.\n\n| Option | Verdict |\n|---|---|\n| Cache in memory | **yes** |\n\n**Objections: {remaining}**"
+reply = f"Codex reply number {calls}. Session {session[:8]}.\n\n| Option | Verdict |\n|---|---|\n| Cache in memory | **yes** |\n\n**Objections: {remaining}**"
 with open(out_file, "w") as f:
     f.write(reply)
 out({"type": "item.completed", "item": {"id": "item_2", "type": "agent_message", "text": reply}})

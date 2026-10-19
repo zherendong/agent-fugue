@@ -6,8 +6,7 @@ import re
 import shlex
 
 from .agents import format_duration
-from .prompts import NAMES
-from .store import AGENTS, Discussion, other_agent
+from .store import Discussion
 
 ROUND_LABELS = {
     "answer": "independent answers",
@@ -38,13 +37,11 @@ def demote_headings(text: str, levels: int = 3) -> str:
     return "\n".join(out)
 
 
-def member_name(agent: str, labels: dict[str, str] | None) -> str:
-    """The agent's real name for the user, with its letter in the council, e.g. "Claude (member A)"."""
-    return f"{NAMES[agent]} (member {labels[agent]})" if labels else NAMES[agent]
-
-
-def entry_heading(kind: str, agent: str, labels: dict[str, str] | None = None) -> str:
-    name, other = member_name(agent, labels), NAMES[other_agent(agent)]
+def entry_heading(kind: str, discussion: Discussion, letter: str) -> str:
+    other_letter = discussion.other(letter)
+    # Two members can have the same name (same tool, model and effort); then the letter tells them apart.
+    same = discussion.name(letter, with_letter=False) == discussion.name(other_letter, with_letter=False)
+    name, other = discussion.name(letter), discussion.name(other_letter, with_letter=same)
     return {
         "answer": name,
         "comment": f"{name}, commenting on {other}'s answer",
@@ -53,6 +50,14 @@ def entry_heading(kind: str, agent: str, labels: dict[str, str] | None = None) -
         "discuss": f"{name}, replying to {other}",
         "final": f"{name}'s final answer",
     }[kind]
+
+
+def resume_command(discussion: Discussion, letter: str, session_id: str) -> str:
+    """The command that opens a member's session in its own tool, with its memory of the discussion."""
+    folder = shlex.quote(str(discussion.cwd))
+    if discussion.members[letter]["tool"] == "claude":
+        return f"cd {folder} && claude --resume {session_id}"
+    return f"cd {folder} && codex resume {session_id}"
 
 
 def round_heading(rnd: dict) -> str:
@@ -71,17 +76,15 @@ def render(discussion: Discussion) -> str:
     lines = [f"# {discussion.title}", ""]
     lines.append(f"Asked in `{discussion.cwd}` at {state['created_at']}. Discussion id: `{discussion.id}`.")
     lines.append("")
-    labels = discussion.labels
     lines.append("The members only know each other by letter: "
-                 + ", ".join(f"{NAMES[a]} is member {labels[a]}" for a in AGENTS) + ".")
+                 + ", ".join(f"member {letter} is {discussion.name(letter, with_letter=False)}"
+                             for letter in discussion.members) + ".")
     lines.append("")
     if sessions:
-        lines.append("To carry on with either agent yourself, with its full memory of this discussion:")
+        lines.append("To carry on with a member yourself, with its full memory of this discussion:")
         lines.append("")
-        if "claude" in sessions:
-            lines.append(f"- Claude: `cd {shlex.quote(str(discussion.cwd))} && claude --resume {sessions['claude']}`")
-        if "codex" in sessions:
-            lines.append(f"- Codex: `cd {shlex.quote(str(discussion.cwd))} && codex resume {sessions['codex']}`")
+        for letter, session_id in sessions.items():
+            lines.append(f"- {discussion.name(letter)}: `{resume_command(discussion, letter, session_id)}`")
         lines.append("")
     lines += ["## Question", "", state["question"].strip(), ""]
 
@@ -89,16 +92,16 @@ def render(discussion: Discussion) -> str:
         lines += ["---", "", f"## {round_heading(rnd)}", ""]
         if rnd["kind"] == "answer" and rnd["index"] > 0:
             lines += [_quote(rnd["question"]), ""]
-        for agent in AGENTS:
-            entry = rnd["entries"].get(agent)
+        for letter in discussion.members:
+            entry = rnd["entries"].get(letter)
             if entry is None:
                 continue
-            lines += [f"### {entry_heading(rnd['kind'], agent, labels)}", ""]
+            lines += [f"### {entry_heading(rnd['kind'], discussion, letter)}", ""]
             for note in entry.get("notes", []):
-                target = "both agents" if note["shared"] else NAMES[agent]
+                target = "both members" if note["shared"] else f"member {letter}"
                 lines += [f"Your note to {target}:", "", _quote(note["text"]), ""]
             if entry["status"] == "done":
-                lines += [demote_headings(discussion.read_reply(rnd["index"], agent).strip()), ""]
+                lines += [demote_headings(discussion.read_reply(rnd["index"], letter).strip()), ""]
             elif entry["status"] == "running":
                 lines += ["*Working...*", ""]
             elif entry["status"] == "failed":
@@ -110,13 +113,13 @@ def render(discussion: Discussion) -> str:
     if any(pending.values()):
         lines += ["---", "", "## Notes waiting for the next round", ""]
         shown_shared = set()
-        for agent in AGENTS:
-            for note in pending.get(agent, []):
+        for letter in discussion.members:
+            for note in pending.get(letter, []):
                 if note["shared"]:
                     if note["text"] in shown_shared:
                         continue
                     shown_shared.add(note["text"])
-                target = "both agents" if note["shared"] else NAMES[agent]
+                target = "both members" if note["shared"] else f"member {letter}"
                 lines += [f"To {target}:", "", _quote(note["text"]), ""]
     return "\n".join(lines).rstrip() + "\n"
 

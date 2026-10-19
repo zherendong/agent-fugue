@@ -39,7 +39,7 @@ if os.environ.get("FAKE_CLAUDE_FAIL") == "1":
     sys.exit(1)
 
 remaining = os.environ.get("FAKE_OBJECTIONS", "1")
-reply = f"Claude reply number {calls}.\n\n# A heading from Claude\n\nSome analysis.\n\nObjections: {remaining}"
+reply = f"Claude reply number {calls}. Session {session[:8]}.\n\n# A heading from Claude\n\nSome analysis.\n\nObjections: {remaining}"
 for i in range(0, len(reply), 20):
     out({"type": "stream_event", "session_id": session, "event": {
         "type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": reply[i:i + 20]}}})

@@ -10,8 +10,8 @@ from typing import Callable
 
 from . import transcript
 from .agents import AgentCall, claude_command, codex_command, find_binary
-from .prompts import NAMES, build_prompt
-from .store import AGENTS, Discussion, FugueError, now_iso, other_agent
+from .prompts import build_prompt
+from .store import TOOL_NAMES, Discussion, FugueError, now_iso
 from .streams import ClaudeStream, CodexStream, Outcome
 
 # -- what each round contains
@@ -40,7 +40,7 @@ def current_question(rounds: list[dict]) -> list[dict]:
 
 def unseen(discussion: Discussion, agent: str, before: int) -> list[int]:
     """Rounds (before `before`) whose reply from the other agent hasn't been forwarded to `agent` yet."""
-    sender = other_agent(agent)
+    sender = discussion.other(agent)
     seen: set[int] = set()
     for rnd in discussion.rounds[:before]:
         entry = rnd["entries"].get(agent)
@@ -57,7 +57,7 @@ def agreed(rnd: dict) -> bool:
     entries = rnd["entries"]
     return (
         rnd["kind"] == "comment"
-        and set(entries) == set(AGENTS)
+        and len(entries) > 1
         and all(entry["status"] == "done" and entry.get("objections") == 0 for entry in entries.values())
     )
 
@@ -83,10 +83,10 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
         raise FugueError("Neither member has anything new from the other to work with.")
 
     for agent, forwarded in planned.items():
-        sender = other_agent(agent)
+        sender = discussion.other(agent)
         messages = [(i, discussion.rounds[i]["kind"], discussion.read_reply(i, sender)) for i in forwarded]
         notes = discussion.take_notes(agent)
-        prompt = build_prompt(kind, me=discussion.labels[agent], other=discussion.labels[sender],
+        prompt = build_prompt(kind, me=agent, other=sender,
                               question=question, followup=followup, messages=messages,
                               notes=[(n["text"], n["shared"]) for n in notes])
         discussion.prompt_path(index, agent).write_text(prompt)
@@ -118,25 +118,27 @@ def parse_objections(reply: str) -> int | None:
     return None
 
 
-def _make_call(discussion: Discussion, rnd: dict, agent: str) -> AgentCall:
+def _make_call(discussion: Discussion, rnd: dict, letter: str) -> AgentCall:
+    """The command for one member in one round, built for that member's tool."""
     settings = discussion.state["settings"]
-    agent_settings = settings[agent]
-    session_id = discussion.state["sessions"].get(agent)
-    stem = discussion.path / "logs" / f"{rnd['index']:02d}-{agent}"
-    if agent == "claude":
-        cmd = claude_command(find_binary("claude"), session_id=session_id, model=agent_settings.get("model"),
-                             extra_args=agent_settings.get("args", []), name=f"fugue: {discussion.title}",
-                             cwd=discussion.cwd, effort=agent_settings.get("effort"),
-                             web=settings.get("web", True))
+    member = discussion.members[letter]
+    session_id = discussion.state["sessions"].get(letter)
+    stem = discussion.log_stem(rnd["index"], letter)
+    web = settings.get("web", True)
+    if member["tool"] == "claude":
+        cmd = claude_command(find_binary("claude"), session_id=session_id, model=member.get("model"),
+                             extra_args=member.get("args", []),
+                             name=f"fugue: {discussion.title} (member {letter})",
+                             cwd=discussion.cwd, effort=member.get("effort"), web=web)
         stream = ClaudeStream(discussion.cwd)
     else:
         reply_file = stem.with_suffix(".last-message.md")
         reply_file.unlink(missing_ok=True)
-        cmd = codex_command(find_binary("codex"), session_id=session_id, model=agent_settings.get("model"),
-                            extra_args=agent_settings.get("args", []), reply_file=reply_file,
-                            effort=agent_settings.get("effort"), web=settings.get("web", True))
+        cmd = codex_command(find_binary("codex"), session_id=session_id, model=member.get("model"),
+                            extra_args=member.get("args", []), reply_file=reply_file,
+                            effort=member.get("effort"), web=web)
         stream = CodexStream(reply_file)
-    return AgentCall(agent, cmd, cwd=discussion.cwd, prompt_file=discussion.prompt_path(rnd["index"], agent),
+    return AgentCall(letter, cmd, cwd=discussion.cwd, prompt_file=discussion.prompt_path(rnd["index"], letter),
                      log_stem=stem, timeout_s=settings["timeout_minutes"] * 60, stream=stream)
 
 
@@ -177,10 +179,10 @@ def run_round(discussion: Discussion, rnd: dict, *, should_stop: Callable[[], bo
         entry["started_at"] = now_iso()
         entry.pop("error", None)
     discussion.save()
-    discussion.emit({"type": "round_started", "round": index, "kind": rnd["kind"], "agents": todo})
+    discussion.emit({"type": "round_started", "round": index, "kind": rnd["kind"], "members": todo})
     for call in calls:
         call.start()
-        discussion.emit({"type": "agent_started", "round": index, "agent": call.agent})
+        discussion.emit({"type": "agent_started", "round": index, "member": call.agent})
 
     # Pieces of text arrive many times a second; they are written out in batches.
     text_buffers = {call.agent: "" for call in calls}
@@ -192,11 +194,11 @@ def run_round(discussion: Discussion, rnd: dict, *, should_stop: Callable[[], bo
         now = time.monotonic()
         if now - last_progress.get(agent, 0.0) >= 2.0:
             last_progress[agent] = now
-            discussion.emit({**event, "round": index, "agent": agent})
+            discussion.emit({**event, "round": index, "member": agent})
 
     def flush(agent: str) -> None:
         if text_buffers[agent]:
-            discussion.emit({"type": "text_delta", "round": index, "agent": agent, "text": text_buffers[agent]})
+            discussion.emit({"type": "text_delta", "round": index, "member": agent, "text": text_buffers[agent]})
             text_buffers[agent] = ""
 
     def finished(call: AgentCall) -> None:
@@ -204,7 +206,7 @@ def run_round(discussion: Discussion, rnd: dict, *, should_stop: Callable[[], bo
         _record(discussion, rnd, call)
         discussion.save()
         entry = rnd["entries"][call.agent]
-        discussion.emit({"type": "agent_finished", "round": index, "agent": call.agent,
+        discussion.emit({"type": "agent_finished", "round": index, "member": call.agent,
                          "ok": entry["status"] == "done", "error": entry.get("error"),
                          "duration_s": entry["duration_s"], "objections": entry.get("objections")})
 
@@ -231,7 +233,7 @@ def run_round(discussion: Discussion, rnd: dict, *, should_stop: Callable[[], bo
                         progress(call.agent, event)
                         continue
                     flush(call.agent)
-                    discussion.emit({**event, "round": index, "agent": call.agent})
+                    discussion.emit({**event, "round": index, "member": call.agent})
                 if call.outcome is not None:
                     waiting.remove(call)
                     finished(call)
@@ -305,6 +307,14 @@ def step_label(rounds: list[dict], step: dict | None) -> str | None:
     return STEP_LABELS.get(step["action"], step["action"])
 
 
+def short_name(discussion: Discussion, letter: str) -> str:
+    """A member's name in a one-line status: its tool, or its letter when both members use the same tool."""
+    tool = discussion.members[letter]["tool"]
+    if sum(1 for member in discussion.members.values() if member["tool"] == tool) > 1:
+        return f"member {letter}"
+    return TOOL_NAMES[tool]
+
+
 def describe(discussion: Discussion) -> dict:
     """Where a discussion stands, and what its next step would be, for showing to the user."""
     state = discussion.state
@@ -315,7 +325,8 @@ def describe(discussion: Discussion) -> dict:
     # What "continue" would do, paused or not.
     next_step = step_label(rounds, plan(state, {**control, "paused": False}, requests))
     if discussion.runner_pid() is not None:
-        working = [NAMES[a] for a, e in (last or {"entries": {}})["entries"].items() if e["status"] == "running"]
+        working = [short_name(discussion, a) for a, e in (last or {"entries": {}})["entries"].items()
+                   if e["status"] == "running"]
         label = f"Round {last['index']}: {' and '.join(working)} working" if working else "Running"
         return {"phase": "running", "label": label, "needs_you": False, "next": next_step}
     if last and not is_complete(last):
@@ -323,8 +334,8 @@ def describe(discussion: Discussion) -> dict:
                   if e["status"] == "failed" and e.get("error") not in (None, "stopped", "interrupted")}
         label = f"Stopped in round {last['index']}"
         if failed:
-            label += f": {' and '.join(NAMES[a] for a in failed)} failed"
-        detail = "; ".join(f"{NAMES[a]}: {error}" for a, error in failed.items())
+            label += f": {' and '.join(short_name(discussion, a) for a in failed)} failed"
+        detail = "; ".join(f"{discussion.name(a)}: {error}" for a, error in failed.items())
         return {"phase": "stopped", "label": label, "detail": detail, "needs_you": True, "next": next_step}
     if plan(state, control, requests) is not None:
         return {"phase": "ready", "label": f"Ready: next, {next_step}", "needs_you": True, "next": next_step}
@@ -336,7 +347,7 @@ def describe(discussion: Discussion) -> dict:
     comments = [rnd for rnd in current_question(rounds) if rnd["kind"] == "comment"]
     detail = ""
     if comments:
-        counts = ", ".join(f"{NAMES[a]} {e.get('objections') if e.get('objections') is not None else '?'}"
+        counts = ", ".join(f"{discussion.name(a)} {e.get('objections') if e.get('objections') is not None else '?'}"
                            for a, e in comments[-1]["entries"].items())
         detail = f"Objections still open after round {comments[-1]['index']}: {counts}."
     label = "Finished at the round limit" if comments else "Finished"
@@ -440,11 +451,11 @@ class Runner:
         if action == "retry":
             rnd = discussion.rounds[-1]
         elif action == "answer":
-            rnd = create_round(discussion, "answer", list(AGENTS), question=step["question"])
+            rnd = create_round(discussion, "answer", list(discussion.members), question=step["question"])
         elif action == "ask":
-            rnd = create_round(discussion, "answer", list(AGENTS), question=step["request"]["question"])
+            rnd = create_round(discussion, "answer", list(discussion.members), question=step["request"]["question"])
         elif action == "next":
-            rnd = create_round(discussion, next_kind(discussion), list(AGENTS))
+            rnd = create_round(discussion, next_kind(discussion), list(discussion.members))
         else:
             raise FugueError(f"fugue no longer handles the request {action!r}; it was dropped.")
         run_round(discussion, rnd, should_stop=self._should_stop(discussion))
