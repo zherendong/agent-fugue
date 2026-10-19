@@ -205,6 +205,17 @@ def test_each_round_forwards_the_right_message(env):
     assert discussion.rounds[1]["entries"][other]["objections"] == 1  # parsed through the **bold**
 
 
+def test_update_prompt_asks_for_the_answer_before_the_responses():
+    from fugue.prompts import build_prompt
+
+    prompt = build_prompt("update", me="A", other="B", messages=[(1, "comment", "Comments from B.")])
+    comments = prompt.index('<comments from="member B" round="1">')
+    answer = prompt.index("1. Your full updated answer")
+    responses = prompt.index("2. After the answer, under a heading of its own, your response to member B's objections")
+    assert comments < answer < responses
+    assert "You are member A of a council of two" in prompt
+
+
 def test_each_member_keeps_one_letter_for_the_whole_discussion(env, monkeypatch):
     fugue("start", "Q?", "-n", "1", "--no-pause", "-q")
     discussion = latest()

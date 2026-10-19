@@ -68,12 +68,16 @@ where <number> counts your objections only, not your suggestions: the problems i
 
 UPDATE_INTRO = WHO + " Here are member {other}'s comments on your answer:"
 
+# The updated answer comes first and the responses to the comments after it,
+# so whoever reads the reply (the user, or the page's "Where it ended") meets
+# the answer straight away.
 UPDATE_TASK = """\
-Update your answer.
+Update your answer in light of member {other}'s comments. Where you can check one of their claims yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve your answer.
 
-First, go through member {other}'s objections: for each one, say whether you accept it, accept part of it, or turn it down, with your reasons in a sentence or two. Where you can check one of their claims yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve your answer; you don't need to explain skipping one.
+Write your reply in two parts, in this order:
 
-Then write your full updated answer to the question. It must stand on its own for a reader who has seen nothing else: no references to earlier rounds or to "my previous answer". Where a point is still disputed between you and member {other}, say so in the answer and give both views.
+1. Your full updated answer to the question. It must stand on its own for a reader who has seen nothing else: no references to earlier rounds, to "my previous answer" or to the comments. Where a point is still disputed between you and member {other}, say so in the answer and give both views.
+2. After the answer, under a heading of its own, your response to member {other}'s objections: for each one, say whether you accept it, accept part of it, or turn it down, with your reasons in a sentence or two. You don't need to explain skipping a suggestion.
 
 Write in the same language as the question."""
 

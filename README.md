@@ -19,7 +19,7 @@ Sending one question to two agents covers more edge cases than either one alone.
 
 - *Round 0, independent answers.* Both get your question unchanged, in separate sessions. Neither sees the other's answer.
 - *Comment rounds.* Each reads the other's current answer and comments on it: what it got right that it had missed, what is wrong or unsupported (checking the other's claims with its tools rather than trusting them), and what is missing. Each comment ends with `Objections: N`: the problems in that answer that would change its conclusions or recommendations. Smaller points are listed as suggestions and not counted, so both members count the same way.
-- *Update rounds.* Each reads the comments on its own answer, says for each whether it accepts it, accepts part of it, or turns it down and why, and writes its full updated answer. Points still in dispute are marked in the answer with both views.
+- *Update rounds.* Each reads the comments on its own answer and writes its full updated answer, then, after it, says for each objection whether it accepts it, accepts part of it, or turns it down and why. Points still in dispute are marked in the answer with both views.
 
 Comments and updates alternate. Each round only uses what the round before it produced, so no message has to keep track of replies still being written: comments are always about the other's answer as it stands now, which was written after reading every earlier comment.
 
