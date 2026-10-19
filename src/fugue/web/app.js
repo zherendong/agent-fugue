@@ -1200,11 +1200,14 @@ async function drawStatus(box) {
   const short = (name) => name.split('@')[0];
   const offList = ['the apps connector'];
   if (off.plugins.length) offList.push(`${plural(off.plugins.length, 'plugin')} (${off.plugins.map(short).join(', ')})`);
-  if (off.mcp_servers.length) offList.push(`${off.mcp_servers.length === 1 ? 'the MCP server' : 'the MCP servers'} ${off.mcp_servers.join(', ')}`);
+  if (off.mcp_servers.length) offList.push(`the ${off.mcp_servers.join(', ')} ${off.mcp_servers.length === 1 ? 'server' : 'servers'}`);
   box.replaceChildren(
     agentRow('claude'),
     agentRow('codex'),
-    row('good', 'Codex in fugue\'s runs', `switched off, as they act outside its sandbox: ${offList.join('; ')}`),
+    row('good', 'Codex extras',
+      el('div', {}, `Off whenever Codex takes part in a discussion: ${offList.join(', ')}.`),
+      el('div', { class: 'muted' }, "They could change files or act in your accounts, which Codex's read-only sandbox doesn't "
+        + 'stop. When you use Codex yourself, they work as usual.')),
     row(s.service.running ? 'good' : 'warn', 'Background service', s.service.text),
     row('good', 'Discussions', `${s.storage.discussions} in `, el('code', {}, tilde(s.storage.path)), ` (${s.storage.megabytes} MB)`),
     row('good', 'This page', `fugue ${s.version} on port ${s.port}`));
