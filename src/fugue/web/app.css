@@ -162,16 +162,131 @@ button.link:hover { color: var(--text); text-decoration: underline; }
 /* ---------- main area ---------- */
 
 #main { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
-#content { flex: 1; padding: 22px 28px 28px; max-width: 1500px; width: 100%; margin: 0 auto; }
+#content {
+  --pad-top: 22px;
+  --pad-x: 28px;
+  flex: 1;
+  padding: var(--pad-top) var(--pad-x) 28px;
+  max-width: 1500px;
+  width: 100%;
+  margin: 0 auto;
+}
 
-.dhead { margin-bottom: 18px; }
-.dhead h1 { font-size: 21px; line-height: 1.3; margin: 0 0 4px; font-weight: 650; }
-.dhead .meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
-.dhead .meta code { color: var(--text); }
+/* The bar at the top of a discussion: title, status, next step, ⋯ menu, rounds. */
+.dbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: calc(-1 * var(--pad-top)) calc(-1 * var(--pad-x)) 10px;
+  padding: 12px var(--pad-x) 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.dbar-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.dbar h1 {
+  flex: 1 1 280px;
+  min-width: 0;
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dbar .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.status { display: inline-flex; align-items: center; gap: 8px; font-weight: 550; font-size: 13.5px; }
 
-.status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
-.status { display: inline-flex; align-items: center; gap: 8px; font-weight: 550; margin-right: 6px; }
-.status-row .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* It scrolls sideways when the rounds don't fit; the faded right edge shows there is more. */
+.round-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-top: 8px;
+  padding-right: 24px;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.round-strip::-webkit-scrollbar { display: none; }
+.round-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.round-chip:hover { border-color: var(--muted); }
+/* The round number, as a small badge so "0 answers" doesn't read as a count. */
+.round-chip .n {
+  min-width: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-weight: 650;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.round-chip .counts { margin-left: 4px; color: var(--warn); }
+.round-chip .counts.ok { color: var(--ok); }
+.round-chip.on { border-color: var(--accent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+.round-chip.result { color: var(--ok); font-weight: 600; }
+.round-chip.failed { border-color: var(--danger); }
+.round-chip.running::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+/* The ⋯ menu. */
+.menu { position: relative; }
+.menu > summary { list-style: none; font-size: 15px; line-height: 1.2; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .18);
+}
+.menu-item {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.menu-item:hover:not(:disabled) { background: var(--hover); }
+.menu-item.danger { color: var(--danger); }
+.menu-item:disabled { opacity: .45; cursor: default; }
+.menu-sep { border-top: 1px solid var(--border); margin: 4px 0; }
+
+/* Under the bar, scrolling away: folder, members, plan. */
+.dinfo { margin-bottom: 16px; }
+.dinfo .meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.dinfo .meta code { color: var(--text); }
 .status-detail {
   margin-top: 8px;
   color: var(--danger);
@@ -199,7 +314,7 @@ button.link:hover { color: var(--text); text-decoration: underline; }
 .question-card { padding: 12px 16px; margin-bottom: 22px; }
 .section-label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
 
-.round { margin-bottom: 26px; scroll-margin-top: 12px; }
+.round { margin-bottom: 26px; scroll-margin-top: calc(var(--bar-h, 0px) + 10px); }
 .round h2 {
   font-size: 14px;
   margin: 0 0 10px;
@@ -212,6 +327,31 @@ button.link:hover { color: var(--text); text-decoration: underline; }
 .round h2 .num { color: var(--muted); font-weight: 500; }
 .round h2 .tally { font-weight: 500; font-size: 12.5px; color: var(--muted); }
 .round h2 .tally.ok { color: var(--ok); }
+.round h2 .fold {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.round h2 .chev { color: var(--muted); width: 10px; flex: none; }
+.round h2 .brief { font-weight: 400; font-size: 12.5px; color: var(--muted); }
+
+/* A folded round is one line. */
+.round.folded { margin-bottom: 6px; }
+.round.folded h2 { margin: 0; padding: 7px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.round.folded h2:hover { border-color: var(--muted); }
+.round.folded + .round:not(.folded) { margin-top: 20px; }
+
+/* Where a finished discussion ended. */
+.round.result h2 { font-size: 15px; }
+.result-note { font-size: 12.5px; margin: -4px 0 10px; }
+.round.result + .round { margin-top: 8px; }
 .followup { padding: 10px 14px; margin-bottom: 10px; }
 
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
@@ -353,33 +493,43 @@ button.link:hover { color: var(--text); text-decoration: underline; }
 .composer-box {
   max-width: 1500px;
   margin: 0 auto;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 4px 10px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: var(--shadow);
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
-.modes { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
-.modes button {
-  border: 1px solid transparent;
-  background: none;
+.composer-box.open { align-items: start; }
+#composer-mode {
+  max-width: 220px;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 2px 9px;
+  background: var(--code-bg);
+  padding: 2px 6px;
   font-size: 12.5px;
   color: var(--muted);
-  cursor: pointer;
 }
-.modes button.on { background: var(--code-bg); color: var(--text); border-color: var(--border); }
 #composer-text {
   width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 2px 0;
   border: none;
   outline: none;
-  resize: vertical;
+  resize: none;
   background: transparent;
-  min-height: 44px;
-  max-height: 40vh;
+  line-height: 1.5;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; }
+.composer-box.open #composer-text { overflow-y: auto; white-space: pre-wrap; }
+#composer-hint { grid-column: 1 / -1; font-size: 12px; display: none; }
+.composer-box.open #composer-hint { display: block; }
 
 /* ---------- new question form ---------- */
 
@@ -445,12 +595,46 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
   .pair { grid-template-columns: 1fr; }
 }
 
+.nav-toggle { display: none; position: relative; font-size: 15px; line-height: 1.2; padding: 3px 9px; }
+.nav-toggle .count {
+  position: absolute;
+  top: -6px;
+  right: -7px;
+  min-width: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--warn);
+  color: #fff;
+  font-size: 10.5px;
+  line-height: 17px;
+  font-weight: 650;
+}
+#nav-backdrop { display: none; }
+.form h1 { display: flex; align-items: center; gap: 10px; }
+
 @media (max-width: 760px) {
-  #app { flex-direction: column; height: auto; min-height: 100vh; }
-  #sidebar { width: 100%; max-height: 38vh; border-right: none; border-bottom: 1px solid var(--border); }
-  #main { overflow: visible; }
-  #content { padding: 16px; }
-  #composer { padding: 8px 16px 12px; }
+  #sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: min(320px, 86vw);
+    transform: translateX(-105%);
+    transition: transform .18s ease;
+    box-shadow: 0 0 32px rgba(0, 0, 0, .25);
+  }
+  body.nav-open #sidebar { transform: none; }
+  body.nav-open #nav-backdrop { display: block; position: fixed; inset: 0; z-index: 29; background: rgba(0, 0, 0, .3); }
+  .nav-toggle { display: inline-flex; }
+  #content { --pad-top: 14px; --pad-x: 16px; }
+  /* Title with ☰ and ⋯ on the first line, status and buttons on the second. */
+  .dbar h1 { font-size: 16px; order: 1; flex: 1 1 calc(100% - 110px); }
+  .dbar .menu { order: 2; }
+  .dbar .status { order: 3; }
+  .dbar .actions { order: 4; }
+  #composer { padding: 8px 12px 10px; }
+  #composer-mode { max-width: 150px; }
   .form .grid { grid-template-columns: 1fr; }
   .form .member-row { grid-template-columns: 1fr; gap: 6px; }
 }
@@ -469,10 +653,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .form .model-row { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .form .hint .link { margin-left: 6px; }
 .form .warn-text { color: var(--warn); }
-.dhead .meta .runs-with.claude { color: var(--claude); }
-.dhead .meta .runs-with.codex { color: var(--codex); }
-.dhead .meta .runs-with.claude.alt { color: var(--claude-alt); }
-.dhead .meta .runs-with.codex.alt { color: var(--codex-alt); }
+.dinfo .meta .runs-with.claude { color: var(--claude); }
+.dinfo .meta .runs-with.codex { color: var(--codex); }
+.dinfo .meta .runs-with.claude.alt { color: var(--claude-alt); }
+.dinfo .meta .runs-with.codex.alt { color: var(--codex-alt); }
 
 /* While an agent works and hasn't started writing, one small line says what it did last. */
 .agent-card .live .last-step {
@@ -513,3 +697,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 button.link.danger-link { color: var(--danger); }
 button.link:disabled { opacity: .45; cursor: default; text-decoration: none; }
 .form h2 + .hint { margin: -2px 0 12px; }
+
+/* Phones: after the narrow-window rules above, so it wins. */
+@media (max-width: 520px) {
+  #composer-mode { max-width: 112px; }
+}

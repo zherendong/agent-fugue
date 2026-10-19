@@ -22,6 +22,8 @@ const S = {
   refreshTimer: 0,
   follow: false,        // keep the view scrolled to the bottom while it runs
   activityOpen: new Map(),
+  roundOpen: new Map(), // "discussion:round" -> open or folded, where the user chose
+  menuOpen: false,      // the ⋯ menu in the discussion's bar
   mode: 'both',
   phases: new Map(),
   info: null,
@@ -325,6 +327,7 @@ async function refreshList() {
       || current.status.label !== S.detail.status.label)) refreshSoon();
   const waiting = list.filter((d) => d.status.needs_you).length;
   document.title = waiting ? `(${waiting}) fugue` : 'fugue';
+  updateNavCounts();
 }
 
 function drawList() {
@@ -365,9 +368,31 @@ function setUpNotifications() {
   });
 }
 
+// On narrow windows the list of discussions slides in from the left, opened
+// by the ☰ button at the top of each page.
+
+function navToggle() {
+  return el('button', { class: 'nav-toggle btn ghost small', type: 'button', title: 'Discussions', 'aria-label': 'Show discussions', onclick: () => setNav(true) },
+    '☰', el('span', { class: 'count', hidden: true }));
+}
+
+function setNav(open) {
+  document.body.classList.toggle('nav-open', open);
+}
+
+// The ☰ button counts the discussions that need you.
+function updateNavCounts() {
+  const waiting = S.list.filter((d) => d.status.needs_you).length;
+  for (const count of document.querySelectorAll('.nav-toggle .count')) {
+    count.textContent = waiting;
+    count.hidden = !waiting;
+  }
+}
+
 // ---------------------------------------------------------------- routing
 
 function route() {
+  setNav(false);
   const m = location.hash.match(/^#\/d\/([A-Za-z0-9._-]+)/);
   if (m) openDiscussion(m[1]);
   else if (location.hash === '#/settings') showSettings();
@@ -382,6 +407,7 @@ function leaveDiscussion() {
   S.detail = null;
   S.detailJson = '';
   S.live = new Map();
+  S.menuOpen = false;
 }
 
 async function openDiscussion(id) {
@@ -499,9 +525,12 @@ async function refreshDetail() {
   if (S.id !== id) return;
   const json = JSON.stringify(data);
   if (json === S.detailJson) return;
+  const before = S.detail && S.detail.status.phase;
   S.detail = data;
   S.detailJson = json;
   drawDiscussion();
+  // Following a discussion as it finishes takes you to where it ended.
+  if (before === 'running' && S.follow && hasResult(data)) jumpTo('result');
 }
 
 function scrollToBottom() {
@@ -516,46 +545,90 @@ function drawDiscussion() {
   const main = $('#main');
   const scroll = main.scrollTop;
   $('#content').replaceChildren(el('div', { class: 'discussion' },
-    header(d),
+    discussionBar(d),
+    infoSection(d),
     el('section', { class: 'question-card' },
       el('div', { class: 'section-label' }, 'Question'),
       el('div', { class: 'md', html: md(d.question) })),
+    resultSection(d),
     d.rounds.map(roundSection),
     d.rounds.length ? null : el('p', { class: 'muted' }, 'Starting…')));
   for (const r of d.rounds) for (const letter of Object.keys(r.entries)) patchCard(r.index, letter);
   drawPending(d);
   drawModes(d);
   $('#composer').hidden = false;
+  updateNavCounts();
+  measureBar();
   if (S.follow) scrollToBottom();
   else main.scrollTop = scroll;
+  markActiveChip();
 }
 
-function header(d) {
+// The bar at the top of a discussion, which stays in view while you scroll:
+// title, status, what you can do next, the ⋯ menu, and a strip of rounds to jump to.
+function discussionBar(d) {
   const status = d.status;
   let label = status.label;
   if (status.phase === 'running' && d.control.paused) label += ' · will pause after this round';
-  return el('header', { class: 'dhead' },
-    el('h1', {}, d.title),
+  return el('div', { class: 'dbar' },
+    el('div', { class: 'dbar-top' },
+      navToggle(),
+      el('h1', { title: `${d.title}\n(click to go to the top)`, onclick: () => { S.follow = false; $('#main').scrollTop = 0; } }, d.title),
+      el('span', { class: `status phase-${status.phase}` }, el('span', { class: 'dot' }), label),
+      el('span', { class: 'actions' }, actions(d)),
+      moreMenu(d)),
+    roundStrip(d));
+}
+
+function moreMenu(d) {
+  const running = d.status.phase === 'running';
+  const close = () => {
+    S.menuOpen = false;
+    menu.open = false;
+  };
+  const item = (text, onclick, extra = {}) => el('button', {
+    type: 'button',
+    class: `menu-item${extra.danger ? ' danger' : ''}`,
+    disabled: extra.disabled,
+    title: extra.title,
+    onclick: () => { close(); onclick(); },
+  }, text);
+  const menu = el('details', { class: 'menu', open: S.menuOpen, ontoggle: () => { S.menuOpen = menu.open; } },
+    el('summary', { class: 'btn ghost small', title: 'More', 'aria-label': 'More actions' }, '⋯'),
+    el('div', { class: 'menu-list' },
+      item('Copy transcript path', () => copy(d.transcript_path)),
+      letters(d).filter((letter) => d.resume[letter]).map((letter) => item(
+        `Copy resume command for ${d.members[letter].name}`, () => copy(d.resume[letter]),
+        { title: "Opens this member's session in your terminal, with its memory of this discussion" })),
+      item('Copy discussion id', () => copy(d.id)),
+      el('div', { class: 'menu-sep' }),
+      item('Move to Trash…', () => deleteDiscussion(d), {
+        danger: true,
+        disabled: running,
+        title: running ? 'Stop it first' : 'Move this discussion to the Trash',
+      })));
+  return menu;
+}
+
+// What scrolls away under the bar: where it runs, who the members are, and the plan.
+function infoSection(d) {
+  const status = d.status;
+  // A finished discussion with answers shows its objection counts in "Where it ended".
+  const detail = status.detail && !(status.phase === 'finished' && hasResult(d)) ? status.detail : null;
+  return el('div', { class: 'dinfo' },
     el('div', { class: 'meta' },
       el('code', { title: 'Folder the members work in' }, tilde(d.cwd)),
       letters(d).map((letter) => el('span', { class: `runs-with ${memberClass(d, letter)}` }, runsWith(d, letter))),
       el('span', {}, d.settings.web === false ? 'no web access' : 'web access for both'),
-      el('span', {}, `started ${ago(d.created_at)}`),
-      el('span', {}, d.id),
-      el('button', { class: 'link', onclick: () => copy(d.transcript_path) }, 'Copy transcript path'),
-      el('button', {
-        class: 'link danger-link',
-        type: 'button',
-        disabled: d.status.phase === 'running',
-        title: d.status.phase === 'running' ? 'Stop it first' : 'Move this discussion to the Trash',
-        onclick: () => deleteDiscussion(d),
-      }, 'Delete'),
-      resumeLinks(d)),
-    el('div', { class: 'status-row' },
-      el('span', { class: `status phase-${status.phase}` }, el('span', { class: 'dot' }), label),
-      el('span', { class: 'actions' }, actions(d))),
-    status.detail ? el('div', { class: `status-detail phase-${status.phase}` }, status.detail) : null,
+      el('span', {}, `started ${ago(d.created_at)}`)),
+    detail ? el('div', { class: `status-detail phase-${status.phase}` }, detail) : null,
     planControls(d));
+}
+
+// Rounds scrolled to by the strip land just below the bar.
+function measureBar() {
+  const bar = $('.dbar');
+  $('#main').style.setProperty('--bar-h', `${bar ? bar.offsetHeight : 0}px`);
 }
 
 // ---------------------------------------------------------------- members
@@ -597,14 +670,6 @@ async function deleteDiscussion(d) {
   leaveDiscussion();
   await refreshList();
   location.hash = S.list.length ? `#/d/${S.list[0].id}` : '#/new';
-}
-
-function resumeLinks(d) {
-  return letters(d).filter((letter) => d.resume[letter]).map((letter) => el('button', {
-    class: 'link',
-    title: `Copies a command that opens ${d.members[letter].name}'s session in your terminal, with its memory of this discussion`,
-    onclick: () => copy(d.resume[letter]),
-  }, `Copy resume command for member ${letter}`));
 }
 
 function button(text, onclick, kind = '') {
@@ -681,15 +746,190 @@ const ROUND_TITLES = {
   final: 'Final answer',
 };
 
+// The same, in a word or two, for the strip of rounds.
+const ROUND_WORDS = {
+  answer: 'answers',
+  comment: 'comments',
+  update: 'updates',
+  review: 'reviews',
+  discuss: 'discussion',
+  final: 'final answers',
+};
+
+const ANSWER_KINDS = new Set(['answer', 'update', 'final']);
+
+function roundTitle(r) {
+  return r.kind === 'answer' && r.index > 0 ? 'Follow-up question, independent answers' : ROUND_TITLES[r.kind];
+}
+
+// ---------------------------------------------------------------- folding rounds
+// Earlier rounds fold into one line each. Open by default: the latest round,
+// and while a round runs, the one before it, whose replies the members are
+// working from. A finished discussion shows "Where it ended" instead, with
+// every round folded. What the user opens or folds stays that way.
+
+function roundIsOpen(d, r) {
+  const key = `${d.id}:${r.index}`;
+  if (S.roundOpen.has(key)) return S.roundOpen.get(key);
+  if (hasResult(d)) return false;
+  const last = d.rounds.length - 1;
+  if (r.index === last) return true;
+  const running = Object.values(d.rounds[last].entries).some((e) => e.status === 'running');
+  return running && r.index === last - 1;
+}
+
+function toggleRound(r) {
+  S.roundOpen.set(`${S.detail.id}:${r.index}`, !roundIsOpen(S.detail, r));
+  S.follow = false;
+  drawDiscussion();
+}
+
+// A member as a folded round's one line names them: the tool, or the letter when both use the same tool.
+function briefName(d, letter) {
+  const tool = d.members[letter].tool;
+  return letters(d).every((other) => d.members[other].tool === tool) ? `member ${letter}` : NAMES[tool];
+}
+
 function roundSection(r) {
-  const shown = letters(S.detail).filter((letter) => r.entries[letter]);
-  const title = r.kind === 'answer' && r.index > 0 ? 'Follow-up question, independent answers' : ROUND_TITLES[r.kind];
-  return el('section', { class: 'round', id: `round-${r.index}` },
-    el('h2', {}, el('span', { class: 'num' }, `Round ${r.index}`), title, tally(r)),
-    r.kind === 'answer' && r.index > 0
+  const d = S.detail;
+  const open = roundIsOpen(d, r);
+  const shown = letters(d).filter((letter) => r.entries[letter]);
+  return el('section', { class: `round${open ? '' : ' folded'}`, id: `round-${r.index}` },
+    el('h2', {},
+      el('button', { type: 'button', class: 'fold', 'aria-expanded': String(open), onclick: () => toggleRound(r) },
+        el('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
+        el('span', { class: 'num' }, `Round ${r.index}`),
+        roundTitle(r)),
+      tally(r),
+      open ? null : el('span', { class: 'brief' },
+        shown.map((letter) => `${briefName(d, letter)} ${stateText(r.entries[letter])}`).join(' · '))),
+    open && r.kind === 'answer' && r.index > 0
       ? el('div', { class: 'followup' }, el('div', { class: 'section-label' }, 'Your follow-up'), el('div', { class: 'md', html: md(r.question) }))
       : null,
-    el('div', { class: `pair${shown.length === 1 ? ' single' : ''}` }, shown.map((letter) => card(r, letter))));
+    open ? el('div', { class: `pair${shown.length === 1 ? ' single' : ''}` }, shown.map((letter) => card(r, letter))) : null);
+}
+
+// ---------------------------------------------------------------- where it ended
+
+// The rounds of the latest question: from the last round of independent answers on.
+function currentRounds(d) {
+  let start = 0;
+  for (const r of d.rounds) if (r.kind === 'answer') start = r.index;
+  return d.rounds.filter((r) => r.index >= start);
+}
+
+// Each member's latest finished answer to the latest question, with the round it is from.
+function latestAnswers(d) {
+  const latest = {};
+  for (const r of currentRounds(d)) {
+    if (!ANSWER_KINDS.has(r.kind)) continue;
+    for (const [letter, e] of Object.entries(r.entries)) if (e.status === 'done') latest[letter] = r;
+  }
+  return latest;
+}
+
+function hasResult(d) {
+  return d.status.phase === 'finished' && Object.keys(latestAnswers(d)).length > 0;
+}
+
+function resultSection(d) {
+  if (!hasResult(d)) return null;
+  const latest = latestAnswers(d);
+  const shown = letters(d).filter((letter) => latest[letter]);
+  const comments = currentRounds(d).filter((r) => ['comment', 'review', 'discuss'].includes(r.kind));
+  const last = comments[comments.length - 1];
+  const asked = currentRounds(d)[0];
+  return el('section', { class: 'round result', id: 'round-result' },
+    el('h2', {}, 'Where it ended', el('span', { class: 'num' }, d.status.label), last ? tally(last) : null),
+    asked.index > 0
+      ? el('div', { class: 'followup' }, el('div', { class: 'section-label' }, 'Your follow-up'), el('div', { class: 'md', html: md(asked.question) }))
+      : null,
+    el('div', { class: 'result-note muted' },
+      "Each member's latest answer. The rounds that led here are folded below; open one to see how they got here."),
+    el('div', { class: `pair${shown.length === 1 ? ' single' : ''}` }, shown.map((letter) => resultCard(d, letter, latest[letter]))));
+}
+
+function resultCard(d, letter, r) {
+  const e = r.entries[letter];
+  return el('article', { class: `agent-card ${memberClass(d, letter)} status-done` },
+    el('header', {},
+      el('span', { class: 'agent-name', title: runsWith(d, letter) }, d.members[letter].short_name),
+      el('span', { class: 'member-letter', title: 'The letter the members know each other by' }, `member ${letter}`),
+      el('span', { class: 'sub' }, `latest answer, from round ${r.index}`)),
+    el('div', { class: 'reply md', html: md(e.reply) }),
+    el('footer', {},
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'link', type: 'button', onclick: () => jumpTo(r.index) }, `Go to round ${r.index}`),
+      el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy answer')));
+}
+
+// ---------------------------------------------------------------- jumping between rounds
+
+function objectionCounts(r) {
+  const d = S.detail;
+  const done = letters(d).filter((letter) => r.entries[letter] && r.entries[letter].status === 'done');
+  if (done.length < 2) return null;
+  if (r.kind === 'comment') {
+    if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'counts ok' }, 'agree');
+    return el('span', { class: 'counts' }, done.map((letter) => `${letter} ${r.entries[letter].objections ?? '?'}`).join(' · '));
+  }
+  if (r.kind === 'review' || r.kind === 'discuss') {
+    return el('span', { class: 'counts' }, done.map((letter) => `${letter} ${r.entries[letter].remaining ?? '?'}`).join(' · '));
+  }
+  return null;
+}
+
+function roundStrip(d) {
+  if (!d.rounds.length) return null;
+  const chips = [];
+  if (hasResult(d)) {
+    chips.push(el('button', { type: 'button', class: 'round-chip result', dataset: { target: 'round-result' }, onclick: () => jumpTo('result') },
+      'Where it ended'));
+  }
+  for (const r of d.rounds) {
+    const entries = Object.values(r.entries);
+    const running = entries.some((e) => e.status === 'running');
+    const failed = entries.some((e) => e.status === 'failed' && !['stopped', 'interrupted'].includes(e.error));
+    const word = r.kind === 'answer' && r.index > 0 ? 'follow-up' : ROUND_WORDS[r.kind];
+    chips.push(el('button', {
+      type: 'button',
+      class: `round-chip${running ? ' running' : ''}${failed ? ' failed' : ''}`,
+      dataset: { target: `round-${r.index}` },
+      title: `Round ${r.index}: ${roundTitle(r)}`,
+      onclick: () => jumpTo(r.index),
+    }, el('span', { class: 'n' }, r.index), ` ${word}`, objectionCounts(r)));
+  }
+  return el('nav', { class: 'round-strip', 'aria-label': 'Rounds' }, chips);
+}
+
+function jumpTo(index) {
+  const d = S.detail;
+  if (index !== 'result') {
+    const r = d.rounds[index];
+    if (!roundIsOpen(d, r)) {
+      S.roundOpen.set(`${d.id}:${index}`, true);
+      drawDiscussion();
+    }
+  }
+  S.follow = false;
+  const node = document.getElementById(index === 'result' ? 'round-result' : `round-${index}`);
+  if (node) node.scrollIntoView({ block: 'start' });
+}
+
+// Highlights the round at the top of the view in the strip.
+function markActiveChip() {
+  const strip = $('.round-strip');
+  if (!strip) return;
+  const line = $('#main').getBoundingClientRect().top + ($('.dbar') ? $('.dbar').offsetHeight : 0) + 16;
+  let current = null;
+  for (const section of document.querySelectorAll('.discussion > section.round')) {
+    if (section.getBoundingClientRect().top <= line) current = section.id;
+  }
+  for (const chip of strip.querySelectorAll('.round-chip')) {
+    const on = chip.dataset.target === current;
+    if (on && !chip.classList.contains('on')) chip.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    chip.classList.toggle('on', on);
+  }
 }
 
 function tally(r) {
@@ -844,31 +1084,24 @@ async function showPrompt(round, letter) {
 // ---------------------------------------------------------------- notes, follow-ups, queue
 
 function modes(d) {
-  const all = { both: { button: 'Note to both', placeholder: 'Add your view, a correction, or something to check…', hint: 'Goes into the next message to both members.' } };
+  const all = {
+    both: { label: 'To both members', placeholder: 'Add a note for both members…', hint: 'Goes into the next message to both members.' },
+  };
   for (const letter of letters(d)) {
-    all[letter] = {
-      button: `Note to member ${letter}`,
-      title: d.members[letter].name,
-      placeholder: `Something only ${d.members[letter].name} should hear…`,
-      hint: `Goes into the next message to ${d.members[letter].name} only.`,
-    };
+    const name = d.members[letter].name;
+    all[letter] = { label: `To ${name}`, placeholder: `A note only ${name} will see…`, hint: `Goes into the next message to ${name} only.` };
   }
-  all.ask = { button: 'Follow-up question', placeholder: 'Ask a follow-up question…', hint: 'Asked once the current round is done. Each member answers on its own first.' };
+  all.ask = { label: 'Follow-up question', placeholder: 'Ask a follow-up question…', hint: 'Asked once the current round is done. Each member answers on its own first.' };
   return all;
 }
 
 function drawModes(d) {
   const all = modes(d);
-  const group = $('.modes');
-  const wanted = Object.keys(all).join(' ');
-  if (group.dataset.modes !== wanted) {
-    group.dataset.modes = wanted;
-    group.replaceChildren(...Object.entries(all).map(([mode, m]) => el('button', {
-      type: 'button',
-      dataset: { mode },
-      title: m.title,
-      onclick: () => setMode(mode),
-    }, m.button)));
+  const select = $('#composer-mode');
+  const wanted = JSON.stringify(Object.entries(all).map(([mode, m]) => [mode, m.label]));
+  if (select.dataset.modes !== wanted) {
+    select.dataset.modes = wanted;
+    select.replaceChildren(...Object.entries(all).map(([mode, m]) => el('option', { value: mode }, m.label)));
   }
   setMode(all[S.mode] ? S.mode : 'both');
 }
@@ -876,9 +1109,20 @@ function drawModes(d) {
 function setMode(mode) {
   const m = modes(S.detail)[mode];
   S.mode = mode;
-  for (const b of document.querySelectorAll('.modes button')) b.classList.toggle('on', b.dataset.mode === mode);
+  $('#composer-mode').value = mode;
   $('#composer-text').placeholder = m.placeholder;
   $('#composer-hint').textContent = `${m.hint} ⌘↩ sends.`;
+}
+
+// The note box is one line until you click into it or it has text.
+function sizeComposer() {
+  const box = $('.composer-box');
+  const text = $('#composer-text');
+  const open = box.contains(document.activeElement) || text.value.trim() !== '';
+  box.classList.toggle('open', open);
+  text.style.height = '';
+  if (open) text.style.height = `${Math.min(Math.max(text.scrollHeight, 66), window.innerHeight * 0.4)}px`;
+  measureBar();
 }
 
 async function send() {
@@ -892,6 +1136,7 @@ async function send() {
   });
   if (!ok) return;
   box.value = '';
+  sizeComposer();
   if (S.mode === 'ask') follow();
   toast(S.mode === 'ask' ? 'Follow-up question queued.' : 'Note saved for the next round.');
   refreshSoon();
@@ -1106,7 +1351,7 @@ async function showNewQuestion() {
   const membersSlot = el('div', {}, el('span', { class: 'muted' }, 'Loading the model lists…'));
 
   const form = el('form', { class: 'form', onsubmit: (e) => { e.preventDefault(); start(form); } },
-    el('h1', {}, 'New question'),
+    el('h1', {}, navToggle(), 'New question'),
     missing.length
       ? el('div', { class: 'warning' }, `The server can't find the ${missing.join(' and ')} command on its PATH, so members can't use it.`)
       : null,
@@ -1149,6 +1394,7 @@ async function showNewQuestion() {
       el('button', { class: 'btn primary', type: 'submit' }, 'Ask both'),
       el('span', { class: 'muted' }, '⌘↩')));
   $('#content').replaceChildren(form);
+  updateNavCounts();
   $('#main').scrollTop = 0;
   $('#q').focus();
   await loadModels();
@@ -1194,7 +1440,7 @@ async function showSettings() {
   const statusBox = el('div', { class: 'status-box' });
   const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, d.max_rounds])].sort((a, b) => a - b);
   const form = el('form', { class: 'form settings', onsubmit: (e) => { e.preventDefault(); saveSettings(form); } },
-    el('h1', {}, 'Settings'),
+    el('h1', {}, navToggle(), 'Settings'),
     el('h2', {}, 'Defaults for new discussions'),
     el('div', { class: 'hint' }, 'The New question form and ', el('code', {}, 'fugue start'),
       ' both start from these. They are saved to ', el('code', {}, tilde(settings.path)),
@@ -1214,6 +1460,7 @@ async function showSettings() {
     el('div', { class: 'submit' }, el('button', { class: 'btn small', type: 'button', onclick: () => drawStatus(statusBox) }, 'Check again')));
   form.members = members;
   $('#content').replaceChildren(form);
+  updateNavCounts();
   $('#main').scrollTop = 0;
   drawStatus(statusBox);
 }
@@ -1264,16 +1511,34 @@ async function drawStatus(box) {
 
 function init() {
   $('#composer-send').addEventListener('click', send);
-  $('#composer-text').addEventListener('keydown', (e) => {
+  $('#composer-mode').addEventListener('change', (e) => setMode(e.target.value));
+  const text = $('#composer-text');
+  text.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       send();
     }
   });
+  text.addEventListener('input', sizeComposer);
+  // Wait for focus to settle, so moving between the box's own controls keeps it open.
+  $('.composer-box').addEventListener('focusin', () => setTimeout(sizeComposer));
+  $('.composer-box').addEventListener('focusout', () => setTimeout(sizeComposer));
   $('#prompt-close').addEventListener('click', () => $('#prompt-dialog').close());
+  $('#nav-backdrop').addEventListener('click', () => setNav(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setNav(false);
+  });
+  // A click anywhere outside the ⋯ menu closes it.
+  document.addEventListener('click', (e) => {
+    if (!S.menuOpen || e.target.closest('.menu')) return;
+    S.menuOpen = false;
+    for (const menu of document.querySelectorAll('details.menu[open]')) menu.open = false;
+  });
+  window.addEventListener('resize', measureBar);
   $('#main').addEventListener('scroll', () => {
     const main = $('#main');
     S.follow = main.scrollTop + main.clientHeight >= main.scrollHeight - 80;
+    markActiveChip();
   }, { passive: true });
   window.addEventListener('hashchange', route);
   setUpNotifications();

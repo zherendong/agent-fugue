@@ -27,12 +27,10 @@
     <div id="composer" hidden>
       <div id="pending"></div>
       <div class="composer-box">
-        <div class="modes" role="group" aria-label="What to send"></div>
-        <textarea id="composer-text" rows="2" aria-label="Message"></textarea>
-        <div class="composer-foot">
-          <span id="composer-hint" class="muted"></span>
-          <button id="composer-send" type="button" class="btn primary small">Send</button>
-        </div>
+        <select id="composer-mode" aria-label="Send to"></select>
+        <textarea id="composer-text" rows="1" aria-label="Message"></textarea>
+        <button id="composer-send" type="button" class="btn primary small">Send</button>
+        <div id="composer-hint" class="muted"></div>
       </div>
     </div>
   </main>
@@ -45,6 +43,7 @@
   </div>
   <pre id="prompt-text"></pre>
 </dialog>
+<div id="nav-backdrop"></div>
 <div id="toasts" aria-live="polite"></div>
 <script src="/static/app.js"></script>
 </body>
