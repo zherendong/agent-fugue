@@ -1,6 +1,6 @@
 # fugue
 
-Ask two agents the same question, as a small council: Claude Code and Codex, or two of either with different models. Each answers on its own; then, round by round, each comments on the other's answer and each updates its own, until neither has objections left or a round limit is reached. You watch it live in a local web page (or the terminal), move it on yourself after every round, and add your own view whenever you want, without copying replies between two windows. Like the voices of a fugue, each member first states its own answer, then they answer each other until the lines fit together.
+Ask two to four coding agents the same question, as a small council: Claude Code, Codex and the DeepSeek Harness, in any mix, with the models and effort levels you choose. Each answers on its own. Two members then comment on each other's answer and update their own, round by round; three or four vote for the best answer to start from, its author merges in the others' best points, and the others review it until no one objects. Either way it runs until there are no objections left or a round limit is reached. You watch it live in a local web page (or the terminal), move it on yourself after every round, and add your own view whenever you want, without copying replies between two windows. Like the voices of a fugue, each member first states its own answer, then they answer each other until the lines fit together.
 
 ```bash
 fugue web                                  # open the page; start questions from there
@@ -13,9 +13,9 @@ Sending one question to two agents covers more edge cases than either one alone.
 
 ## How it works
 
-**How fugue talks to the agents.** It runs their own command-line tools headless (`claude -p` and `codex exec`), so each agent keeps its normal tools, project instructions (`CLAUDE.md`, `AGENTS.md`) and its ability to read the code. Each agent has one session for the whole discussion, and fugue resumes it every round (`claude --resume`, `codex exec resume`). So each agent remembers its own earlier reasoning, and fugue only sends what is new. While an agent works, fugue reads its live output (`--output-format stream-json` and `--json`) and turns it into steps you can watch: "Read src/cache.py", "$ rg -n cache src", how far Claude has got while it thinks ("Thinking: about 12k tokens so far"; at high effort it can think for minutes before writing), and the reply as it is written.
+**How fugue talks to the agents.** It runs their own command-line tools headless (`claude -p`, `codex exec` and `dsh --profile headless`), so each agent keeps its normal tools, project instructions (`CLAUDE.md`, `AGENTS.md`) and its ability to read the code. Each agent has one session for the whole discussion, and fugue resumes it every round (`claude --resume`, `codex exec resume`, `dsh … --session-id`). So each agent remembers its own earlier reasoning, and fugue only sends what is new. While an agent works, fugue reads its live output (`--output-format stream-json` and `--json`) and turns it into steps you can watch: "Read src/cache.py", "$ rg -n cache src", how far Claude has got while it thinks ("Thinking: about 12k tokens so far"; at high effort it can think for minutes before writing), and the reply as it is written.
 
-**The council.** The two agents are equal members; there are no roles. Each member is a tool (Claude Code or Codex) with a model, an effort level and any extra arguments, and both members can use the same tool, for example two Codex members with different models. Every round, both take part, in parallel, and both do the same job:
+**Two members.** The members are equal; there are no roles. Each member is a tool (Claude Code, Codex or the DeepSeek Harness) with a model, an effort level and any extra arguments, and members can use the same tool, for example two Codex members with different models. With two members, every round both take part, in parallel, and both do the same job:
 
 - *Round 0, independent answers.* Both get your question unchanged, in separate sessions. Neither sees the other's answer.
 - *Comment rounds.* Each reads the other's current answer and comments on it: what it got right that it had missed, what is wrong or unsupported (checking the other's claims with its tools rather than trusting them), and what is missing. Each comment ends with `Objections: N`: the problems in that answer that would change its conclusions or recommendations. Smaller points are listed as suggestions and not counted, so both members count the same way.
@@ -25,11 +25,21 @@ Comments and updates alternate. Each round only uses what the round before it pr
 
 It stops when a comment round has no objections on either side (they agree), or after the round limit (2 rounds of comments and updates by default). The result is the members' latest answers: if they agree, they say the same thing; if not, each marks what is still disputed.
 
+**Three or four members.** Everyone reading and rewriting everyone's answer every round would cost too much, so a council of three or four works from one shared answer:
+
+- *Independent answers*, as above.
+- *Vote.* Each member ranks the other members' answers (never its own), each seeing them in its own random order, and says what each gets right and the problems that would change its conclusions. Every ballot gives an answer one point for every answer it ranks below it; the answer with the most points is the starting point (a tie is drawn at random). A ballot without a readable ranking isn't counted, and the page says why.
+- *Merge.* The author of the starting point merges the other members' best points into it (it read their answers when it voted), fixes the problems the ballots found, and lists the points it didn't take, with reasons.
+- *Review.* The other members review the result: objections (including their own points left out or misrepresented), suggestions, and whether another starting point would clearly have been better.
+- *Revise.* The author revises: the full answer first, then a response to each objection and the points it still hasn't taken.
+
+Reviews and revisions alternate until no reviewer objects, or until the round limit (rounds of review and revision) is reached; the last revision is reviewed too, so you see what is still open. When most reviewers say the starting point was wrong, or the objections haven't gone down for two rounds, everyone answers again and the council votes again, once per question on its own; "Vote again" (or `fugue revote`) asks for it any time. Votes and reviews stay symmetric: every member ranks, and every member but the author reviews, so no answer wins by who wrote it. The result is the council's one answer, with the points it didn't take and any objections still open.
+
 **Hidden names, fixed letters.** The members are never told which agent or model the other is. Each gets a letter for the whole discussion, member A or member B, drawn at random when the discussion starts, so the first member you choose isn't always "A". Every message from round 1 on says "You are member A; the other member is member B", forwarded replies are marked `from="member B"`, and the members are asked to refer to each other only by letter. A letter means the same member to whoever reads it, whereas "the other member" would point to someone else once a reply is passed on. The page, the transcript and `fugue status` show you who is who, for example "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)" when both members use the same tool. The exact wording sent to the members is in [src/fugue/prompts.py](src/fugue/prompts.py); edit it there to change how they talk to each other.
 
-**Where you come in.** After every round, fugue pauses and names the next step, for example "Next: each comments on the other's answer"; you move it on when you're ready. At any time you can:
+**Where you come in.** fugue pauses and names the next step, for example "Next: each comments on the other's answer"; you move it on when you're ready. Two members pause after every round; a council pauses after its vote (to see the points, and start from another answer if you like) and after each revision. At any time you can:
 
-- add a note to both members or just one; it goes into the next message fugue sends;
+- add a note to every member or just one; it goes into the next message fugue sends that member;
 - stop the agents mid-round;
 - ask for one more round, also after they agreed or reached the limit;
 - ask a follow-up question, which starts again with independent answers;
@@ -39,25 +49,26 @@ If an agent fails or is stopped, the discussion waits; continuing retries just t
 
 **Who has seen what.** fugue records which of the other agent's replies each agent has already received, so nothing is forwarded twice or skipped and the order is always right. "Inspect context" on each reply shows the exact message the member got that round, and everything fugue had sent it up to then, with each part marked by where it came from.
 
-**Same tool, same blind spots.** Two members running the same model tend to make the same mistakes and agree on them, so the council catches less. Different tools or models work best; the page warns when both members run the same model.
+**Same tool, same blind spots.** Members running the same model tend to make the same mistakes and agree on them, so the council catches less. Different tools or models work best; the page warns when two members run the same model.
 
 **What the agents may do.** Read files and run commands, but not change anything: two agents editing the same checkout at the same time would trip over each other, and fugue is meant for analysis. Both run in their tool's own sandbox, where macOS itself refuses writes:
 
 - *Codex* runs in its `read-only` sandbox, which also refuses its own file editor (`apply_patch`). What in your Codex setup acts outside that sandbox is switched off for fugue's runs: the apps connector (`--disable apps`), and every plugin and MCP server that is on in `~/.codex/config.toml` (computer use, Chrome, `node_repl` and so on), each with a `-c ….enabled=false` override. Your Codex config file is not changed, and your model and effort settings still apply.
+- *DeepSeek* (the DeepSeek Harness) runs with its `read-only` permission preset, in its own sandbox (Seatbelt on macOS), with approvals refused since nobody can answer them. Its telemetry, which by default sends session records after a user's feedback, and its extra model call for a session title are off for fugue's runs, set in a settings overlay written for each run (`--patch`); your dsh profile is not changed.
 - *Claude* runs in Claude Code's sandbox, set for fugue's runs only (passed with `--settings`; your own Claude settings are not changed). Nobody can answer permission prompts in a headless run, so Claude runs in "don't ask" mode, where anything that would ask is refused; Bash is allowed outright because every command runs inside the sandbox. The sandbox refuses writes to the project and your home folder (the temp folder stays writable, as some tools need it), refuses network access, refuses to start a command outside itself, and the run fails rather than going ahead if the sandbox can't start. Claude's own file tools can't write (`Edit`, `Write` and `NotebookEdit` are turned off), and its Read tool may read any file except in `~/.ssh` and `~/.aws`. If your Claude settings list `sandbox.excludedCommands`, those commands would run outside the sandbox, so fugue then stops allowing Bash outright and Claude only gets the commands the sandbox approves by itself.
 
 **The web, for both or neither.** "Members may use the web" (on by default; `--no-web` on the command line, `web = false` in the config file) applies to both members:
 
 - *On:* Codex keeps its web search, which runs on OpenAI's servers. Claude may use WebSearch and WebFetch. Claude's page fetches come from your Mac, so fetches from `localhost` and `127.0.0.1` are refused; other addresses only your Mac can reach (other local servers, your network) are not blocked.
-- *Off:* Claude's WebSearch and WebFetch are switched off, and Codex runs with `web_search="disabled"`.
+- *Off:* Claude's WebSearch and WebFetch are switched off, Codex runs with `web_search="disabled"`, and DeepSeek's web tools are switched off in its overlay.
 
 With the web on, a page an agent reads could contain instructions aimed at it, for example to send the contents of a file it read somewhere. That holds for both agents; switch the web off for sensitive projects.
 
-The exact flags are in `claude_read_only_args` and `codex_isolation_args` in [src/fugue/agents.py](src/fugue/agents.py).
+The exact flags are in `claude_read_only_args`, `codex_isolation_args` and `dsh_overlay` in [src/fugue/agents.py](src/fugue/agents.py).
 
 ## Install
 
-You need [uv](https://docs.astral.sh/uv/), and `claude` and `codex` on your PATH, each logged in as you normally use them. fugue uses those logins.
+You need [uv](https://docs.astral.sh/uv/), and on your PATH the tools your members use: `claude` and `codex`, each logged in as you normally use them (fugue uses those logins), and for DeepSeek members `dsh` (`npm install -g @deepseek-ai/dsh`) with a DeepSeek API key, in `DEEPSEEK_API_KEY` or saved in dsh's settings. Settings' status check shows what it finds.
 
 ```bash
 git clone https://github.com/zherendong/agent-fugue.git
@@ -107,11 +118,12 @@ fugue service uninstall    # stop it and remove it
 |---|---|
 | `fugue web` | Open the web page (`--port`, `--no-open`). |
 | `fugue service install` | Keep the web page running in the background on macOS; also `status`, `restart`, `uninstall`. |
-| `fugue start "question"` | Start a discussion; both answer, then it pauses. `-n 3` sets the round limit (rounds of comments and updates), `--no-pause` runs every round without waiting for you, `--no-web` keeps both members off the web. |
+| `fugue start "question"` | Start a discussion; every member answers, then it goes on to the first pause. `--member` (two to four times) picks the members, `-n 3` sets the round limit, `--no-pause` runs every round without waiting for you, `--no-web` keeps every member off the web. |
 | `fugue continue` | Run the next round (it says which), or retry the agents that failed or were stopped. |
 | `fugue next` | Run one more round, also after they agreed or reached the limit. |
 | `fugue ask "question"` | Ask a follow-up in the same discussion. |
-| `fugue note "text"` | Add your own view to the next round, for both members or one (`--to A`, `--to B`). |
+| `fugue revote` | A council of three or four: every member answers again and the council votes again on where to start. |
+| `fugue note "text"` | Add your own view to the next round, for every member or one (`--to A`, `--to B`, ...). |
 | `fugue pause` / `fugue stop` | Pause after the current round / stop the agents now. Works on a discussion running in another terminal or the page. |
 | `fugue status` | Who the members are, the rounds so far, objection counts, the next step, usage, and the commands to continue either member's session yourself. |
 | `fugue show [round]` | Print the replies from a round (default: the last; `--member A` for one member). `--prompt` shows exactly what fugue sent instead. |
@@ -137,24 +149,25 @@ Run either to continue in that agent's interactive interface, with everything fr
 
 ### Members: tool, model and effort
 
-Each discussion has two members, each a tool with a model and an effort level. On the page, the New question form starts from your usual line-up in Settings, and what it shows is what runs: change a member's tool, model, effort or extra arguments there for this discussion only. On the command line, give `--member TOOL[:MODEL[:EFFORT]]` twice, leaving out a part to use the tool's own default:
+Each discussion has two to four members, each a tool (`claude`, `codex` or `dsh`) with a model and an effort level. On the page, the New question form starts from your usual line-up in Settings, and what it shows is what runs: add or remove members, or change a member's tool, model, effort or extra arguments, for this discussion only. On the command line, give `--member TOOL[:MODEL[:EFFORT]]` two to four times, leaving out a part to use the tool's own default:
 
 ```bash
 fugue start "..." --member claude:claude-opus-5-5:high --member codex:gpt-6.1-sol:medium
 fugue start "..." --member codex:gpt-6.1-sol:high --member codex:gpt-6-astra:medium  # two Codex members
 fugue start "..." --member claude::max --member codex                               # default models
+fugue start "..." --member claude --member codex --member dsh:deepseek-flash:high   # a council of three
 ```
 
 Without `--member`, the line-up saved in Settings (or the config file) is used.
 
-- **Where the lists come from.** Codex reports its own models: fugue asks `codex debug models` (and keeps a copy for a day; "Ask Codex again" on the page or `fugue models --refresh` asks again), so new Codex models show up by themselves, each with the effort levels it accepts. Claude Code has no such command, so fugue carries a short list of the current Claude models in [src/fugue/models.py](src/fugue/models.py) (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5, each taking `low` to `max`); add a line there when a new one comes out. "Other model id…" takes any id the tool accepts.
+- **Where the lists come from.** Codex reports its own models: fugue asks `codex debug models` (and keeps a copy for a day; "Ask Codex again" on the page or `fugue models --refresh` asks again), so new Codex models show up by themselves, each with the effort levels it accepts. Claude Code and the DeepSeek Harness have no such command, so fugue carries short lists in [src/fugue/models.py](src/fugue/models.py): Claude Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5, each taking `low` to `max`; DeepSeek Flash and DeepSeek V4 Pro, each taking `off`, `low`, `high` or `max`. Add a line there when a new one comes out. "Other model id…" takes any id the tool accepts.
 - **Effort levels are checked.** The effort menu only offers the levels the chosen model accepts, and `fugue start` refuses a level the model doesn't take.
-- **Default means fugue passes nothing**, so the tool uses its own settings: Claude Code its `model` in `~/.claude/settings.json` and its own effort, Codex the `model` and `model_reasoning_effort` in `~/.codex/config.toml`. The menus show what that is, and `fugue models` prints it.
-- How they reach the tools: Claude gets `--model ID --effort LEVEL`; Codex gets `-m ID -c model_reasoning_effort="LEVEL"`.
+- **Default means fugue passes nothing**, so the tool uses its own settings: Claude Code its `model` in `~/.claude/settings.json` and its own effort, Codex the `model` and `model_reasoning_effort` in `~/.codex/config.toml`, dsh its profile's model (DeepSeek Flash at high effort unless you changed it). The menus show what that is, and `fugue models` prints it.
+- How they reach the tools: Claude gets `--model ID --effort LEVEL`; Codex gets `-m ID -c model_reasoning_effort="LEVEL"`; dsh gets them in its overlay (`model`, `reasoningEffort`).
 
 ### Other settings
 
-Each member's extra arguments for its tool (`claude -p` or `codex exec`) are in its row on the page. On the command line, `--member-args` goes with the `--member` in the same position; the time limit is `--timeout`:
+Each member's extra arguments for its tool (`claude -p`, `codex exec` or `dsh --profile headless`) are in its row on the page. On the command line, `--member-args` goes with the `--member` in the same position; the time limit is `--timeout`:
 
 ```bash
 fugue start "..." --member claude --member codex --member-args="--add-dir ../shared" --timeout 45
@@ -168,11 +181,11 @@ They go in `~/.config/fugue/config.toml`:
 
 ```toml
 timeout_minutes = 30
-max_rounds = 2                 # rounds of comments and updates after the answers
+max_rounds = 2                 # rounds of comments and updates (of review and revision, in a council)
 pause_after_each_round = true  # false: run every round without waiting for you
 web = true                     # false: neither member may use the web
 
-# The usual two members, in order. Leave out model or effort for the tool's own default.
+# The usual members (two to four), in order. Leave out model or effort for the tool's own default.
 [[members]]
 tool = "claude"
 model = "claude-opus-5-5"
