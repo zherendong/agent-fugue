@@ -575,9 +575,9 @@ function drawDiscussion() {
     questionBlock(d),
     d.status.phase === 'stopped' && d.status.detail ? el('div', { class: 'problem' }, d.status.detail) : null,
     view ? view.node : el('p', { class: 'muted starting' }, 'Starting…'),
+    pendingSection(d),
     historySection(d, view ? view.round : null)));
   for (const r of d.rounds) for (const letter of Object.keys(r.entries)) patchCard(r.index, letter);
-  drawPending(d);
   drawModes(d);
   $('#composer').hidden = false;
   updateNavCounts();
@@ -833,7 +833,7 @@ function pairOf(d, shown, make) {
 }
 
 function followupBlock(question) {
-  return el('div', { class: 'followup' }, el('div', { class: 'label' }, 'Your follow-up'), el('div', { class: 'md', html: md(question) }));
+  return youEntry('follow-up question', question);
 }
 
 // The round in progress, or just done, of a discussion that hasn't finished.
@@ -841,6 +841,7 @@ function currentRoundSection(d, r) {
   return el('section', { class: 'answers', id: `round-${r.index}` },
     sectionHead(`Round ${r.index}: ${roundTitle(r)}`, tally(r)),
     r.kind === 'answer' && r.index > 0 ? followupBlock(r.question) : null,
+    sentNotes(d, r),
     pairOf(d, letters(d).filter((letter) => r.entries[letter]), (letter) => card(r, letter)));
 }
 
@@ -930,10 +931,12 @@ function historyRound(d, r) {
     el('span', { class: 'num' }, r.index),
     el('span', { class: 'title' }, roundTitle(r)),
     tally(r),
+    sentNotes(d, r).length ? el('span', { class: 'you-mark' }, 'with your note') : null,
     el('span', { class: 'spacer' }),
     el('span', { class: 'brief' }, shown.map((letter) => `${letter} ${stateText(r.entries[letter])}`).join(' · '))),
     open ? el('div', { class: 'hround-body' },
       r.kind === 'answer' && r.index > 0 ? followupBlock(r.question) : null,
+      sentNotes(d, r),
       pairOf(d, shown, (letter) => card(r, letter))) : null);
 }
 
@@ -1000,10 +1003,6 @@ function card(r, letter) {
     dataset: { round: r.index, member: letter },
   },
   columnHead(d, letter, subtitle(r.kind, letter, r.index), stateText(e)),
-  e.notes.length
-    ? e.notes.map((n) => el('div', { class: 'note' },
-      el('span', { class: 'label' }, n.shared ? 'Your note to both: ' : 'Your note: '), n.text))
-    : null,
   body,
   el('footer', {},
     el('button', { class: 'link steps-toggle', type: 'button', hidden: true, onclick: () => toggleSteps(key) }),
@@ -1214,26 +1213,83 @@ function sizeComposer() {
   if (open) text.style.height = `${Math.min(Math.max(text.scrollHeight, 66), window.innerHeight * 0.4)}px`;
 }
 
-// Notes and requests waiting for the next round, one quiet line each.
-function drawPending(d) {
-  const lines = [];
+// ---------------------------------------------------------------- your part in the discussion
+// What you add, notes and follow-up questions, shows in the discussion as your
+// own entries: waiting ones under the latest round, saying when they go out,
+// and sent ones at the top of the round they went out with.
+
+function youEntry(head, text, ...actions) {
+  return el('div', { class: 'you' },
+    el('div', { class: 'you-head' },
+      el('span', { class: 'you-who' }, 'You'), el('span', {}, ` · ${head}`), el('span', { class: 'spacer' }), ...actions),
+    text ? el('div', { class: 'md', html: md(text) }) : null);
+}
+
+// The notes a round's messages carried, once each: a note to both is on both members' entries.
+function sentNotes(d, r) {
   const seen = new Set();
-  const line = (text, onremove, title) => el('div', { class: 'pending-line', title },
-    el('span', { class: 'text' }, text),
-    el('button', { type: 'button', class: 'link', onclick: () => attempt(async () => { await onremove(); refreshSoon(); }) }, 'Remove'));
+  const out = [];
+  for (const letter of letters(d)) {
+    for (const note of (r.entries[letter] && r.entries[letter].notes) || []) {
+      if (note.shared && seen.has(note.text)) continue;
+      if (note.shared) seen.add(note.text);
+      out.push(youEntry(`${note.shared ? 'note to both' : `note to member ${letter}`}, sent with this round`, note.text));
+    }
+  }
+  return out;
+}
+
+function nextRoundText(d) {
+  const last = d.rounds[d.rounds.length - 1];
+  if (!last || d.status.phase === 'stopped') return 'the next round';
+  return `round ${d.status.phase === 'running' ? last.index + 1 : d.rounds.length}`;
+}
+
+function pendingSection(d) {
+  const items = [];
+  const seen = new Set();
+  const when = nextRoundText(d);
   for (const letter of letters(d)) {
     (d.inbox.notes[letter] || []).forEach((note, index) => {
       if (note.shared && seen.has(note.text)) return;
       if (note.shared) seen.add(note.text);
-      lines.push(line(`${note.shared ? 'Note to both' : `Note to member ${letter}`}: ${note.text}`,
-        () => api('DELETE', path('notes'), { member: letter, index }), note.text));
+      const remove = () => api('DELETE', path('notes'), { member: letter, index });
+      items.push(youEntry(`${note.shared ? 'note to both' : `note to member ${letter}`}, goes out with ${when}`, note.text,
+        editLink(remove, note.text, note.shared ? 'both' : letter), removeLink(remove)));
     });
   }
   for (const r of d.inbox.requests) {
-    const text = r.type === 'ask' ? `Follow-up queued: ${r.question}` : 'One more round queued';
-    lines.push(line(text, () => api('DELETE', path('requests', r.id)), text));
+    const remove = () => api('DELETE', path('requests', r.id));
+    if (r.type === 'ask') {
+      items.push(youEntry('follow-up question, asked once the current round is done', r.question,
+        editLink(remove, r.question, 'ask'), removeLink(remove)));
+    } else {
+      items.push(youEntry('asked for one more round', '', removeLink(remove, 'Cancel')));
+    }
   }
-  $('#pending').replaceChildren(...lines);
+  return items.length ? el('div', { class: 'pending' }, items) : null;
+}
+
+function removeLink(remove, label = 'Remove') {
+  return el('button', { type: 'button', class: 'link', onclick: () => attempt(async () => { await remove(); refreshSoon(); }) }, label);
+}
+
+// Takes a waiting note or question back into the box to change it.
+function editLink(remove, text, mode) {
+  return el('button', {
+    type: 'button',
+    class: 'link',
+    onclick: () => attempt(async () => {
+      await remove();
+      S.modeChosen = true;
+      setMode(mode);
+      const box = $('#composer-text');
+      box.value = text;
+      box.focus();
+      sizeComposer();
+      refreshSoon();
+    }),
+  }, 'Edit');
 }
 
 // ---------------------------------------------------------------- model pickers
