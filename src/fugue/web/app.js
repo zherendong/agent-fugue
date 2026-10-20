@@ -962,10 +962,11 @@ function memberTitle(d, letter) {
   return `${NAMES[d.members[letter].tool]} · ${modelLabel(d, letter)}`;
 }
 
-// Where space is short: the tool, or the letter when both members use the same tool.
+// Where space is short: the tool, with the letter when another member uses the same tool too.
 function shortWho(d, letter) {
   const tool = d.members[letter].tool;
-  return letters(d).every((other) => d.members[other].tool === tool) ? `member ${letter}` : NAMES[tool];
+  const shared = letters(d).some((other) => other !== letter && d.members[other].tool === tool);
+  return shared ? `${NAMES[tool]} ${letter}` : NAMES[tool];
 }
 
 // Members take their tool's colour; when both use the same tool, the second gets another shade.
