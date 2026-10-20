@@ -429,9 +429,23 @@ def describe(discussion: Discussion) -> dict:
                 if rnd["kind"] == "comment" or (in_council and rnd["kind"] == "review")]
     detail = ""
     if comments:
-        counts = ", ".join(f"{discussion.name(a)} {e.get('objections') if e.get('objections') is not None else '?'}"
-                           for a, e in comments[-1]["entries"].items())
-        detail = f"Objections still open after step {step_number(comments[-1]['index'])}: {counts}."
+        # Who raised how many objections in the last comments (or reviews). With two members the
+        # last update came after them and says what each author did with them, so they aren't
+        # called open; a council's last revision is reviewed once more, so its reviews are.
+        last = comments[-1]
+        raised = []
+        for a, e in last["entries"].items():
+            count = e.get("objections")
+            if count == 0:
+                continue
+            what = "?" if count is None else f"{count} objection{'' if count == 1 else 's'}"
+            raised.append(f"{discussion.name(a)} raised {what}" if in_council
+                          else f"{discussion.name(a)} raised {what} on {discussion.name(discussion.other(a))}'s answer")
+        if raised:
+            where = "reviews" if in_council else "comments"
+            then = ("; the answer wasn't revised after them" if in_council
+                    else "; each author's last update says what it did with them")
+            detail = f"The last {where} (step {step_number(last['index'])}): {', '.join(raised)}{then}."
     label = "Finished at the round limit" if comments else "Finished"
     return {"phase": "finished", "label": label, "detail": detail, "needs_you": False, "next": None}
 

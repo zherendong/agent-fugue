@@ -42,6 +42,26 @@ BALLOT_KINDS = ("vote",)
 
 WHO = "You are member {me} of a council of two; the other member is member {other}."
 
+# Rewriting the user's own material (a resume, a design document, code in the
+# folder) tends to make claims quietly stronger than the source. Whoever reads
+# an answer checks it against the source; whoever writes one checks itself.
+SOURCE_CHECK = (
+    "If the answer rewrites, summarizes or quotes material the user provided (an attached file, text in the "
+    "question, or a file in the folder), go through it line by line against the source: for each sentence about "
+    "that material, find what the source says. A sentence that says more than the source is an objection, even if "
+    "it reads better: a stronger part for someone (a role, credit or initiative the source doesn't give them), a "
+    "purpose, cause or effect the source doesn't state, a method, tool, time or number it doesn't mention, a "
+    "qualifier dropped (such as \"estimated\" or \"in simulation\"), or an item added to a list that the source "
+    "doesn't have. So is a placeholder written as if it were known. Quote the source's wording next to the answer's. "
+    "A change of wording that keeps the meaning and the strength of the evidence is not an objection."
+)
+SOURCE_KEEP = (
+    "If your answer rewrites, summarizes or quotes material the user provided (an attached file, text in the "
+    "question, or a file in the folder), check each claim you wrote about it against the source before you finish: "
+    "say nothing stronger than the source does and add no fact it doesn't contain. Anything that needs confirming "
+    "goes in a list of questions, not into the answer."
+)
+
 LETTERS = (
     'Write about yourself in the first person ("I"), and call the other member member {other}. You may write '
     'the word "member" in the language you are writing in, but keep the letter, and never just say "the '
@@ -64,6 +84,8 @@ Comment on member {other}'s answer as it stands now. Member {other} will read yo
 
 Judge only what their answer says now: don't repeat a point it already handles, and don't invent objections. If their answer shows a mistake in yours, note it in one line.
 
+""" + SOURCE_CHECK + """
+
 Keep two kinds of point apart. An objection is a problem that would change their answer's conclusions or recommendations if it were fixed: an error, an unsupported claim, or an omission that matters for what the user asked. Anything smaller (more precision, extra detail, better wording, a nice-to-have) goes in a short list of suggestions at the end, marked as suggestions; member {other} may take them or leave them."""
 
 COMMENT_REJECTIONS = """
@@ -85,6 +107,8 @@ UPDATE_INTRO = WHO + " Here are member {other}'s comments on your answer:"
 UPDATE_TASK = """\
 Update your answer in light of member {other}'s comments. Where you can check one of their claims yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve your answer. Keep the layout of your previous answer unless changing it is the point, so the user can see what changed.
 
+""" + SOURCE_KEEP + """
+
 Write your reply in two parts, in this order:
 
 1. Your full updated answer to the question. It must stand on its own for a reader who has seen nothing else: no references to earlier rounds, to "my previous answer", to the comments or to member {other}. Leave the discussion out of it: points still in dispute belong in the second part.
@@ -98,6 +122,8 @@ CLOSING_INTRO = WHO + " Member {other} has no objections to your answer. Here ar
 
 CLOSING_TASK = """\
 This is your final version. Take the suggestions that improve your answer and leave the rest. Change only what they call for and keep the layout, so the user can see what changed.
+
+""" + SOURCE_KEEP + """
 
 Write your reply in two parts, in this order:
 
@@ -233,7 +259,7 @@ VOTE_INTRO = (
 VOTE_TASK = """\
 Decide which of these answers is the best starting point for the council's shared answer. The member whose answer wins will merge the other members' best points into it, and the rest of you will then review the result. Your own answer is not in this list.
 
-For each answer, say briefly what it gets right, and list the problems that would change its conclusions or recommendations, if there are any. Where you can check a claim yourself, check it rather than trusting it. Judge correctness first, then how fully it answers the question, then clarity, and don't let an answer's place in the list sway you.
+For each answer, say briefly what it gets right, and list the problems that would change its conclusions or recommendations, if there are any. Where you can check a claim yourself, check it rather than trusting it. Where an answer rewrites material the user provided, a claim stronger than the source, or a fact the source doesn't contain, is one of those problems. Judge correctness first, then how fully it answers the question, then clarity, and don't let an answer's place in the list sway you.
 
 Write in the same language as the question. End with this line, kept in English and exactly in this form, ranking every answer above from best to worst:
 
@@ -250,6 +276,8 @@ Write the council's shared answer, starting from your own.
 1. Merge in the points from the other members' answers that make it more correct or more complete: you read their answers when you voted. Fix the problems the ballots found in your answer where you agree they are problems. Where you can check a claim yourself, check it rather than trusting it.
 2. It must stand on its own for a reader who has seen nothing else: no references to members, votes or earlier answers. Leave the discussion out of it: what members disagree on belongs in the third part.
 3. After the answer, a line that says exactly "## Points not taken", in English whatever language you write in. Then the points from other members' answers that you did not take, each with the member's letter and your reason in a sentence or two, and anything that matters on which members disagree.
+
+""" + SOURCE_KEEP + """
 
 Write in the same language as the question."""
 
@@ -271,6 +299,8 @@ Review this answer as it stands now. Member {editor} will read the reviews and r
 
 Judge only what the answer says now: don't repeat a point it already handles, and don't invent objections.
 
+""" + SOURCE_CHECK + """
+
 Keep two kinds of point apart. An objection is a problem that would change the answer's conclusions or recommendations if it were fixed. Anything smaller (more precision, extra detail, better wording) goes in a short list of suggestions at the end, marked as suggestions."""
 
 REVIEW_REJECTIONS = """
@@ -290,6 +320,8 @@ REVISE_INTRO = COUNCIL_WHO + " Here are the other members' reviews of the counci
 REVISE_TASK = """\
 Revise the council's answer in light of the reviews. Where you can check a reviewer's claim yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve the answer. Keep the layout of the previous version unless changing it is the point, so the user can see what changed.
 
+""" + SOURCE_KEEP + """
+
 Write your reply in two parts, in this order:
 
 1. The full revised answer. It must stand on its own for a reader who has seen nothing else: no references to members, reviews or earlier versions. Leave the discussion out of it: what members still disagree on belongs in the second part.
@@ -305,6 +337,8 @@ CLOSING_REVISE_INTRO = (
 
 CLOSING_REVISE_TASK = """\
 This is the council's final version. Take the suggestions that improve the answer and leave the rest. Change only what they call for and keep the layout, so the user can see what changed.
+
+""" + SOURCE_KEEP + """
 
 Write your reply in two parts, in this order:
 

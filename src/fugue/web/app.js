@@ -874,8 +874,10 @@ function statusText(d) {
     return text;
   }
   if (s.phase === 'finished' && !s.label.startsWith('Agreed')) {
-    const open = openObjections(d);
-    if (open) return `${s.label} · ${plural(open, 'objection')} still open`;
+    // fugue counts the objections in the last comments; whether each was then taken up is in the
+    // authors' responses, so the line says what was raised, not what is left.
+    const raised = openObjections(d);
+    if (raised) return `${s.label} · the last ${d.council ? 'reviews' : 'comments'} had ${plural(raised, 'objection')}`;
   }
   return s.label;
 }
@@ -1285,7 +1287,7 @@ function resultSection(d) {
     sectionHead(d.council && shown.length === 1 ? "The council's answer" : 'Their latest answers', shown.length),
     asked.index > 0 ? followupBlock(asked) : null,
     pairOf(d, shown, (letter) => resultColumn(d, letter, latest[letter])),
-    stillOpen(d));
+    lastObjections(d));
 }
 
 function resultColumn(d, letter, r) {
@@ -1299,9 +1301,10 @@ function resultColumn(d, letter, r) {
       el('button', { class: 'link', type: 'button', onclick: () => copy(splitReply(e.reply).answer) }, 'Copy')));
 }
 
-// When the members stopped at the round limit with objections left: the last
-// objections, and how each answer's author responded to them.
-function stillOpen(d) {
+// When the round limit ended a discussion whose last comments had objections: those
+// objections, and how each answer's author responded in its last update. A council's
+// last revision is reviewed once more, so its last reviews are still unanswered.
+function lastObjections(d) {
   if (d.status.phase !== 'finished' || d.status.label.startsWith('Agreed')) return null;
   const rounds = currentRounds(d);
   const critiques = rounds.filter((r) => r.kind === 'comment' || (d.council && r.kind === 'review'));
@@ -1328,8 +1331,10 @@ function stillOpen(d) {
   }
   if (!items.length) return null;
   return el('div', { class: 'still-open' },
-    el('h2', {}, 'Still open'),
-    el('p', { class: 'muted' }, 'The last comments still had objections when the round limit was reached.'),
+    el('h2', {}, d.council ? 'Objections in the last reviews' : 'The last objections, and how each author responded'),
+    el('p', { class: 'muted' }, d.council
+      ? "The round limit was reached after these reviews, so the council's answer wasn't revised again."
+      : "The round limit was reached after these comments. Each author's last update says what it did with them."),
     items);
 }
 

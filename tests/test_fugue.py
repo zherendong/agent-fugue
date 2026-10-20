@@ -128,8 +128,12 @@ def test_without_pausing_it_runs_to_the_round_limit(env):
     assert len(calls(env)) == 10
     status = engine.describe(discussion)
     assert status["phase"] == "finished" and status["label"] == "Finished at the round limit"
+    # The last update came after the last comments, so the objections in them aren't called open.
+    assert status["detail"].startswith("The last comments (step 4): ")
     for letter in discussion.members:
-        assert f"{discussion.name(letter)} 1" in status["detail"]
+        other = discussion.other(letter)
+        assert f"{discussion.name(letter)} raised 1 objection on {discussion.name(other)}'s answer" in status["detail"]
+    assert status["detail"].endswith("each author's last update says what it did with them.")
     assert "runner" not in discussion.state
     text = discussion.transcript_path.read_text()
     assert "Claude reply number 1." in text and "Codex reply number 5." in text
@@ -247,6 +251,25 @@ def test_comments_stay_on_the_question_and_count_their_suggestions():
     assert "Objections: <number>\nSuggestions: <number>" in prompt
     assert engine.parse_suggestions("Points.\n\nObjections: 0\nSuggestions: 3") == 3
     assert engine.parse_suggestions("Points.\n\nObjections: 0") is None
+
+
+def test_rewrites_of_the_users_material_are_checked_against_the_source():
+    from fugue import prompts
+    from fugue.prompts import build_council_prompt, build_prompt
+
+    comment = build_prompt("comment", me="A", other="B", messages=[(0, "answer", "B's answer.")])
+    update = build_prompt("update", me="A", other="B", messages=[(1, "comment", "B's comments.")])
+    closing = build_prompt("update", me="A", other="B", messages=[(1, "comment", "B's comments.")], closing=True)
+    assert "go through it line by line against the source" in comment
+    assert "Quote the source's wording next to the answer's" in comment
+    for writer in (update, closing):
+        assert prompts.SOURCE_KEEP in writer and prompts.SOURCE_CHECK not in writer
+    letters = ["A", "B", "C"]
+    review = build_council_prompt("review", me="B", letters=letters, editor="A", messages=[(2, "merge", "A", "x")])
+    vote = build_council_prompt("vote", me="B", letters=letters, messages=[(0, "answer", "A", "x")])
+    merge = build_council_prompt("merge", me="A", letters=letters, editor="A", messages=[(1, "vote", "B", "x")])
+    assert prompts.SOURCE_CHECK in review and prompts.SOURCE_KEEP in merge
+    assert "a claim stronger than the source, or a fact the source doesn't contain, is one of those problems" in vote
 
 
 def test_suggestions_without_objections_get_one_closing_version(env, monkeypatch):
@@ -795,7 +818,8 @@ def test_a_council_votes_merges_reviews_and_revises(env, monkeypatch):
     b_sessions = {c["session"] for c in calls(env) if c["agent"] == b_tool}
     assert len(b_sessions) == 1
     status = engine.describe(discussion)
-    assert status["label"] == "Finished at the round limit" and "Objections still open after step 6" in status["detail"]
+    assert status["label"] == "Finished at the round limit"
+    assert status["detail"].startswith("The last reviews (step 6): ") and "the answer wasn't revised after them" in status["detail"]
     text = discussion.transcript_path.read_text()
     assert "Step 2: each votes for the best answer to start from" in text
     assert "Starting point: member B's answer, by vote (3 of 3 ballots counted)." in text
