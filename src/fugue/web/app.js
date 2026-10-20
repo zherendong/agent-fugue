@@ -2314,11 +2314,16 @@ function init() {
   $('.composer-box').addEventListener('focusin', () => setTimeout(sizeComposer));
   $('.composer-box').addEventListener('focusout', () => setTimeout(sizeComposer));
   $('#nav-backdrop').addEventListener('click', () => setNav(false));
+  // Any link in the list closes it on narrow windows, even to the page already shown.
+  $('#sidebar').addEventListener('click', (e) => { if (e.target.closest('a')) setNav(false); });
   for (const dialog of document.querySelectorAll('dialog')) {
     dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
   }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') setNav(false);
+    if (e.key !== 'Escape') return;
+    setNav(false);
+    S.menuOpen = false;
+    for (const menu of document.querySelectorAll('details.menu[open]')) menu.open = false;
   });
   // A click anywhere outside the ⋯ menu closes it.
   document.addEventListener('click', (e) => {
