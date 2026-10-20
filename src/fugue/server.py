@@ -52,6 +52,7 @@ def summary(discussion: Discussion) -> dict:
         "id": discussion.id,
         "title": discussion.title,
         "cwd": discussion.state["cwd"],
+        "no_folder": bool(discussion.state.get("no_folder")),
         "created_at": discussion.state["created_at"],
         "updated_at": discussion.state["updated_at"],
         "rounds": len(discussion.rounds),
@@ -118,7 +119,6 @@ def detail(discussion: Discussion) -> dict:
         **summary(discussion),
         "question": discussion.state["question"],
         "attachments": discussion.state.get("attachments", []),
-        "no_folder": bool(discussion.state.get("no_folder")),
         # Three or four members vote, merge and review instead of commenting side by side.
         "council": council.is_council(discussion.members),
         "control": discussion.read_control(),

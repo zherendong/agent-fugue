@@ -125,6 +125,10 @@ function basename(path) {
   return path.split('/').filter(Boolean).pop() || path;
 }
 
+function joinAnd(items) {
+  return items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
 function firstLine(text) {
   const line = String(text).split('\n').find((l) => l.trim()) || '';
   return line.length > 200 ? line.slice(0, 199) + '…' : line;
@@ -356,7 +360,7 @@ function drawList() {
   nav.replaceChildren(...S.list.map((d) => el('a', {
     class: `item${d.id === S.id ? ' active' : ''}`,
     href: `#/d/${d.id}`,
-    title: `${d.title}\n${d.status.label} · ${tilde(d.cwd)}`,
+    title: `${d.title}\n${d.status.label} · ${d.no_folder ? 'no folder' : tilde(d.cwd)}`,
   },
   el('div', { class: 't' },
     d.status.needs_you || d.status.phase === 'running' ? el('span', { class: `dot phase-${d.status.phase}` }) : null,
@@ -767,9 +771,9 @@ function detailsPanel(d) {
     el('summary', { class: 'icon-btn', title: 'Details and actions', 'aria-label': 'Details and actions' }, '⋯'),
     el('div', { class: 'menu-panel' },
       el('dl', { class: 'facts' },
-        fact('Folder', el('code', {}, tilde(d.cwd))),
+        fact('Folder', d.no_folder ? 'None: the members work with the attached files only' : el('code', {}, tilde(d.cwd))),
         letters(d).map((letter) => fact(`Member ${letter}`, el('span', { class: `mdot ${memberClass(d, letter)}` }), memberLine(d, letter))),
-        fact('Web', d.settings.web === false ? 'Off for both members' : 'Both members may use it'),
+        fact('Web', d.settings.web === false ? 'Off' : `On: ${everyone(d)} may use it`),
         fact('Started', ago(d.created_at))),
       planControls(d),
       el('div', { class: 'menu-sep' }),
@@ -878,13 +882,25 @@ const request = (body) => attempt(async () => {
   refreshSoon();
 });
 
+// What one of the rounds you set is: two members comment and update, a council reviews and revises.
+function roundsLabel(members) {
+  return members > 2 ? 'Rounds of review and revision' : 'Rounds of comments and updates';
+}
+
+function roundsHint(members) {
+  return members > 2
+    ? 'After the answers and the vote, each round has two steps: the others review the shared answer, then its author '
+      + 'revises it. It stops earlier once no reviewer objects.'
+    : "After the answers, each round has two steps: each comments on the other's answer, then each updates their own. "
+      + 'It stops earlier once neither has objections.';
+}
+
 function planControls(d) {
   const c = d.control;
   const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, c.max_rounds])].sort((a, b) => a - b);
   return el('div', { class: 'plan' },
-    el('label', { title: d.council ? 'Each round: the others review the shared answer, then its author revises it. It stops earlier once no reviewer objects.'
-      : "Each round: both comment on the other's answer, then both update their own. It stops earlier once neither has objections." },
-      d.council ? 'Rounds of review and revision' : 'Rounds of comments and updates',
+    el('label', { title: roundsHint(letters(d).length) },
+      roundsLabel(letters(d).length),
       el('select', { onchange: (e) => control({ max_rounds: Number(e.target.value) }) },
         counts.map((n) => el('option', { value: n, selected: n === c.max_rounds }, n)))),
     el('label', {},
@@ -1735,7 +1751,8 @@ function modelPicker(tool, chosen) {
 const MAX_MEMBERS = 4;
 
 // Two to four member rows, with a hint under them, for the New question form and Settings.
-function membersField(chosen) {
+// `onchange` gets the line-up whenever it changes.
+function membersField(chosen, onchange = null) {
   const hint = el('div', { class: 'hint' });
   const warning = el('div', { class: 'hint warn-text' });
   const list = el('div', { class: 'member-list' });
@@ -1755,6 +1772,7 @@ function membersField(chosen) {
       ? 'Two members answer on their own, then comment on each other\'s answer and update their own, side by side.'
       : `${picked.length} members answer on their own, then vote for the best answer to start from. Its author merges the `
         + "others' best points into it, the others review it, and it is revised until no one objects.";
+    if (onchange) onchange(picked);
   };
   const draw = () => {
     rows = lineup.map((member, index) => memberRow(index, member, update, lineup.length > 2 ? () => {
@@ -1786,7 +1804,7 @@ function membersField(chosen) {
           const current = rows.map((row) => row.read());
           box.replaceChildren(el('span', { class: 'muted' }, 'Asking Codex for its models…'));
           await loadModels(true);
-          const fresh = membersField(current);
+          const fresh = membersField(current, onchange);
           box.replaceWith(fresh);
           box.read = fresh.read;
         },
@@ -1818,31 +1836,42 @@ async function showNewQuestion() {
   const rounds = defaults ? defaults.max_rounds : 2;
   const pause = defaults ? defaults.pause_after_each_round : true;
   const web = defaults ? defaults.web : true;
-  const lineup = (defaults ? defaults.members : [{ tool: 'claude' }, { tool: 'codex' }])
-    .map((m) => (m.model ? `${TOOL_LABELS[m.tool]} (${m.model})` : TOOL_LABELS[m.tool]));
-  const lineupText = lineup.length === 2 ? lineup.join(' and ') : `${lineup.slice(0, -1).join(', ')} and ${lineup[lineup.length - 1]}`;
+  let lineup = defaults ? defaults.members : [{ tool: 'claude' }, { tool: 'codex' }];
   const membersSlot = el('div', {}, el('span', { class: 'muted' }, 'Loading the model lists…'));
 
   // Who answers and how it runs start from Settings and stay folded into one line until you change them.
+  const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, rounds])].sort((a, b) => a - b);
+  const roundsSelect = el('select', { name: 'max_rounds' }, counts.map((n) => el('option', { value: n, selected: n === rounds }, n)));
+  const pauseBox = el('input', { type: 'checkbox', name: 'pause', checked: pause });
+  const webBox = el('input', { type: 'checkbox', name: 'web', checked: web });
+  const roundsText = el('span');
+  const roundsHintNode = el('div', { class: 'hint' });
+  const summary = el('span');
+  // The folded line and the rounds wording follow what the form says now.
+  const describe = () => {
+    const names = lineup.map((m) => (m.model ? `${TOOL_LABELS[m.tool]} (${modelName(m.tool, m.model)})` : TOOL_LABELS[m.tool]));
+    const n = Number(roundsSelect.value);
+    roundsText.textContent = roundsLabel(lineup.length);
+    roundsHintNode.textContent = roundsHint(lineup.length);
+    summary.textContent = `${joinAnd(names)} · ${plural(n, 'round')} of ${lineup.length > 2 ? 'review and revision' : 'comments and updates'}`
+      + ` · ${pauseBox.checked ? 'pauses along the way' : 'runs to the end'} · ${webBox.checked ? 'web on' : 'no web'}`;
+  };
+  for (const input of [roundsSelect, pauseBox, webBox]) input.addEventListener('change', describe);
+  describe();
   const options = el('div', { class: 'more-options', hidden: true },
     el('div', { class: 'field' },
       el('div', { class: 'label' }, 'How it runs'),
       el('div', { class: 'options' },
-        el('label', {}, 'Rounds of comments and updates',
-          el('select', { name: 'max_rounds' }, [0, 1, 2, 3, 4, 5, 6, 8, 10].map((n) => el('option', { value: n, selected: n === rounds }, n)))),
-        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: pause }), 'Pause after each round'),
-        el('label', { title: "Both or neither. Claude: web search and fetching pages (not from this Mac's own servers). Codex: its web search." },
-          el('input', { type: 'checkbox', name: 'web', checked: web }), 'Members may use the web'),
+        el('label', {}, roundsText, roundsSelect),
+        el('label', {}, pauseBox, 'Pause after each round'),
+        el('label', { title: "All or none. Claude: web search and fetching pages (not from this Mac's own servers). Codex and DeepSeek: their web search." },
+          webBox, 'Members may use the web'),
         el('label', {}, 'Give up on a member after',
           el('input', { type: 'text', name: 'timeout', class: 'short', placeholder: String(defaults ? defaults.timeout_minutes : 30) }), 'minutes')),
-      el('div', { class: 'hint' },
-        "After the answers, each round has two steps: each comments on the other's answer, then each updates their own. "
-        + 'It stops earlier once neither has objections.')),
+      roundsHintNode),
     el('div', { class: 'field' },
       el('div', { class: 'label' }, 'Members'),
       membersSlot));
-  const summary = el('span', {},
-    `${lineupText} · ${plural(rounds, 'round')} of ${lineup.length > 2 ? 'review' : 'comments and updates'} · ${pause ? 'pauses along the way' : 'runs to the end'} · ${web ? 'web on' : 'no web'}`);
   const change = el('button', {
     class: 'link',
     type: 'button',
@@ -1894,7 +1923,7 @@ async function showNewQuestion() {
   $('#main').scrollTop = 0;
   $('#q').focus();
   await loadModels();
-  const members = membersField(defaults ? defaults.members : []);
+  const members = membersField(lineup, (picked) => { lineup = picked; describe(); });
   membersSlot.replaceChildren(members);
   form.members = members;
 }
@@ -1933,7 +1962,8 @@ async function showSettings() {
     return;
   }
   const d = settings.defaults;
-  const members = membersField(d.members);
+  const roundsText = el('span', {}, roundsLabel(d.members.length));
+  const members = membersField(d.members, (picked) => { roundsText.textContent = roundsLabel(picked.length); });
   const statusBox = el('div', { class: 'status-box' });
   const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, d.max_rounds])].sort((a, b) => a - b);
   const form = el('form', { class: 'form settings', onsubmit: (e) => { e.preventDefault(); saveSettings(form); } },
@@ -1944,7 +1974,7 @@ async function showSettings() {
       '; saving rewrites that file, so comments in it are not kept.'),
     el('div', { class: 'field' },
       el('div', { class: 'options' },
-        el('label', {}, 'Rounds of comments and updates',
+        el('label', {}, roundsText,
           el('select', { name: 'max_rounds' }, counts.map((n) => el('option', { value: n, selected: n === d.max_rounds }, n)))),
         el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: d.pause_after_each_round }), 'Pause after each round'),
         el('label', {}, el('input', { type: 'checkbox', name: 'web', checked: d.web }), 'Members may use the web'),
