@@ -37,7 +37,7 @@ It stops when a comment round has no objections on either side (they agree), or 
 
 If an agent fails or is stopped, the discussion waits; continuing retries just that agent with the same message.
 
-**Who has seen what.** fugue records which of the other agent's replies each agent has already received, so nothing is forwarded twice or skipped and the order is always right. "What fugue sent" on each reply shows the exact message an agent got.
+**Who has seen what.** fugue records which of the other agent's replies each agent has already received, so nothing is forwarded twice or skipped and the order is always right. "Inspect context" on each reply shows the exact message the member got that round, and everything fugue had sent it up to then, with each part marked by where it came from.
 
 **Same tool, same blind spots.** Two members running the same model tend to make the same mistakes and agree on them, so the council catches less. Different tools or models work best; the page warns when both members run the same model.
 
@@ -69,13 +69,18 @@ uv tool install --python 3.11 --editable .
 
 ## The web page
 
-`fugue web` serves the page at <http://127.0.0.1:8765/> and opens it. On the left is every discussion, from every project, with where it stands ("Round 2: Claude and Codex working", "Paused after round 1", "Agreed in round 3", "Stopped in round 1: Codex failed"). On the right is the selected discussion: each round shows the two members side by side, with their steps while they work, the reply as it is written, and then the reply itself. When it pauses, the button at the top names the next step. The box at the bottom sends notes and follow-up questions.
+`fugue web` serves the page at <http://127.0.0.1:8765/> and opens it. On the left is every discussion, from every project, with a dot on the ones that are working or waiting for you. On the right is the selected discussion:
+
+- **At the top**, the question and one line saying where it stands ("Paused after round 1", "Agreed in round 3").
+- **The answers**: the round in progress, or once it has finished, each member's latest answer, side by side ("One at a time" shows one member at full width). While a member works you see its last step, then the reply as it is written. Earlier rounds are folded into one line; open it to see each round.
+- **You**: your notes and follow-up questions appear in the discussion as your own entries, saying when they go out ("note to both, goes out with round 2"), until they are sent with that round.
+- **At the bottom**, one bar for whatever happens next: write your view for the next round (or pick "Follow-up question"), and press the button that names the next step, such as "Continue: each updates their answer". It takes your note along. While a round runs, the same bar has "Pause after this round" and "Stop".
+- **⋯** (top right) holds the folder, each member's model and effort, the round limit and pausing, the commands to resume each member's session, and Move to Trash.
 
 - Discussions started from the page run inside the `fugue web` process. Stopping it (Ctrl-C) stops their agents cleanly; continue them from the page later. Discussions started with `fugue start` in a terminal show up on the page live too.
 - To give it its own window and Dock icon, open the page in Safari and choose File → Add to Dock, or in Chrome use "Install page as app".
-- "Notify me when a discussion needs me" turns on a desktop notification when a discussion stops running.
-- **Settings** (bottom left) holds the defaults for new discussions (rounds, pausing, web access, time limit, and the usual two members: each one's tool, model, effort and extra arguments), saved to `~/.config/fugue/config.toml`, which `fugue start` reads too. Saving rewrites that file, so comments in it are not kept. Below them is a status check: whether `claude` and `codex` are found and logged in (checked without calling a model), their versions, what fugue switches off in Codex for its runs, whether the background service is running, and where discussions are stored.
-- **Delete**, in a discussion's header, moves it to the Trash, where Finder can restore it. The members' own Claude and Codex sessions are kept, so `claude --resume` and `codex resume` still find them. It isn't offered while the discussion runs.
+- **Settings** (bottom left) holds the defaults for new discussions (rounds, pausing, web access, time limit, and the usual two members: each one's tool, model, effort and extra arguments), saved to `~/.config/fugue/config.toml`, which `fugue start` reads too. Saving rewrites that file, so comments in it are not kept. Below them is a status check: whether `claude` and `codex` are found and logged in (checked without calling a model), their versions, what fugue switches off in Codex for its runs, desktop notifications (turn them on there to hear when a discussion stops and needs you), whether the background service is running, and where discussions are stored.
+- **Move to Trash**, in a discussion's ⋯, moves it to the Trash, where Finder can restore it. The members' own Claude and Codex sessions are kept, so `claude --resume` and `codex resume` still find them. It isn't offered while the discussion runs.
 - The server only listens on 127.0.0.1, and every request must carry a random token that only the page it serves receives, so other websites open in your browser can't use it to start agents.
 
 ### Keeping it running in the background (macOS)
@@ -119,7 +124,7 @@ Questions and notes can also come from a file (`-f question.md`), from stdin (`-
 
 ### Continuing in an agent yourself
 
-Both members' sessions are ordinary sessions of their tool. `fugue status` (or "Copy resume command for member A" on the page) gives you, for example:
+Both members' sessions are ordinary sessions of their tool. `fugue status` (or "Copy resume command for member A" in a discussion's ⋯ on the page) gives you, for example:
 
 ```
 cd ~/code/my-repo && claude --resume 6f1c...
