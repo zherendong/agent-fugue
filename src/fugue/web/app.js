@@ -717,11 +717,20 @@ function openObjections(d) {
   return Object.values(last.entries).reduce((sum, e) => sum + (e.objections || 0), 0);
 }
 
-// The full question, when the title (its first line) doesn't already say it all.
-function questionBlock(d) {
+// What the question says beyond its title (its first line, cut at 80 characters).
+function questionRest(d) {
   const question = d.question.trim();
+  const lines = question.split('\n');
+  const first = lines.findIndex((line) => line.trim());
+  const head = first < 0 ? '' : lines[first].trim().replace(/^#+/, '').trim();
+  return head === d.title.trim() ? lines.slice(first + 1).join('\n').trim() : question;
+}
+
+// The rest of the question under the title, and the files that came with it.
+function questionBlock(d) {
+  const question = questionRest(d);
   const files = attachmentList(d, d.attachments);
-  const showText = question !== d.title.trim();
+  const showText = question !== '';
   if (!showText && !files) return null;
   const long = showText && (question.length > 240 || question.split('\n').length > 4);
   const open = S.questionOpen.has(d.id);
@@ -938,8 +947,9 @@ function layoutToggle() {
     el('button', { type: 'button', class: S.layout === 'single' ? 'on' : '', onclick: () => setLayout('single') }, 'One at a time'));
 }
 
-function sectionHead(title, ...extra) {
-  return el('div', { class: 'section-head' }, el('h2', {}, title), ...extra, el('span', { class: 'spacer' }), layoutToggle());
+function sectionHead(title, columns, ...extra) {
+  return el('div', { class: 'section-head' }, el('h2', {}, title), ...extra, el('span', { class: 'spacer' }),
+    columns > 1 ? layoutToggle() : null);
 }
 
 function pairOf(d, shown, make) {
@@ -972,7 +982,7 @@ function followupBlock(r) {
 // The round in progress, or just done, of a discussion that hasn't finished.
 function currentRoundSection(d, r) {
   return el('section', { class: 'answers', id: `round-${r.index}` },
-    sectionHead(`Round ${r.index}: ${roundTitle(r)}`, tally(r)),
+    sectionHead(`Round ${r.index}: ${roundTitle(r)}`, Object.keys(r.entries).length, tally(r)),
     r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r) : null,
     sentNotes(d, r),
     r.kind === 'vote' ? voteBoard(d, r) : null,
@@ -1051,7 +1061,7 @@ function resultSection(d) {
   const shown = letters(d).filter((letter) => latest[letter]);
   const asked = currentRounds(d)[0];
   return el('section', { class: 'answers', id: 'round-result' },
-    sectionHead(d.council && shown.length === 1 ? "The council's answer" : 'Their latest answers'),
+    sectionHead(d.council && shown.length === 1 ? "The council's answer" : 'Their latest answers', shown.length),
     asked.index > 0 ? followupBlock(asked) : null,
     pairOf(d, shown, (letter) => resultColumn(d, letter, latest[letter])));
 }
@@ -1673,7 +1683,7 @@ function memberRow(index, chosen, onchange, onremove = null) {
   row.append(
     el('span', { class: 'member-num' }, `Member ${index + 1}`),
     el('div', { class: 'member-body' }, tool, picker, args),
-    onremove ? el('button', { type: 'button', class: 'link remove', title: 'Remove this member', onclick: onremove }, 'Remove') : null);
+    onremove ? el('button', { type: 'button', class: 'link remove', title: 'Remove this member', onclick: onremove }, 'Remove') : '');
   row.read = () => {
     const modelChoice = row.querySelector('select.model');
     const model = !modelChoice ? chosen.model || ''
