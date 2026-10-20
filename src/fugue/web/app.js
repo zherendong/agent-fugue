@@ -968,10 +968,6 @@ function shortWho(d, letter) {
   return letters(d).every((other) => d.members[other].tool === tool) ? `member ${letter}` : NAMES[tool];
 }
 
-function otherName(d, letter) {
-  return shortWho(d, otherLetter(d, letter));
-}
-
 // Members take their tool's colour; when both use the same tool, the second gets another shade.
 function memberClass(d, letter) {
   const tool = d.members[letter].tool;
@@ -993,8 +989,8 @@ async function deleteDiscussion(d) {
   location.hash = S.list.length ? `#/d/${S.list[0].id}` : '#/new';
 }
 
-function button(text, onclick, kind = '') {
-  return el('button', { class: `btn small ${kind}`, type: 'button', onclick }, text);
+function button(text, onclick, kind = '', title = null) {
+  return el('button', { class: `btn small ${kind}`, type: 'button', onclick, title }, text);
 }
 
 function path(...parts) {
@@ -1302,28 +1298,6 @@ function tally(r) {
 
 // ---------------------------------------------------------------- one member's reply
 
-function subtitle(kind, letter, index) {
-  if (S.detail.council) {
-    const reopen = S.detail.rounds[index] && S.detail.rounds[index].reopen;
-    return {
-      answer: reopen ? 'its new answer' : index > 0 ? 'its own answer to the follow-up' : 'its own answer',
-      vote: 'its ballot',
-      merge: 'the merged answer',
-      review: 'its review',
-      revise: 'the revised answer',
-    }[kind];
-  }
-  const other = otherName(S.detail, letter);
-  return {
-    answer: index > 0 ? 'its own answer to the follow-up' : 'its own answer',
-    comment: `on ${other}'s answer`,
-    update: 'updated answer',
-    review: `reviewing ${other}'s answer`,
-    discuss: `replying to ${other}`,
-    final: 'final answer',
-  }[kind];
-}
-
 function stateText(e) {
   if (e.status === 'running') return 'working';
   if (e.status === 'done') return fmtDuration(e.duration_s);
@@ -1357,7 +1331,7 @@ function card(r, letter) {
     id: `card-${r.index}-${letter}`,
     dataset: { round: r.index, member: letter },
   },
-  columnHead(d, letter, subtitle(r.kind, letter, r.index), stateText(e)),
+  columnHead(d, letter, null, stateText(e)),
   body,
   el('footer', {},
     el('button', { class: 'link steps-toggle', type: 'button', hidden: true, onclick: () => toggleSteps(key) }),
@@ -1628,7 +1602,8 @@ function barActions(d) {
     if (await submitText()) await then();
   };
   // Files go with a follow-up question; dropping or pasting one switches the box to it.
-  const attach = button(S.picker.files.length ? `Attach (${S.picker.files.length})` : 'Attach', () => S.picker.open(), 'ghost');
+  const attach = button(S.picker.files.length ? `Attach (${S.picker.files.length})` : 'Attach', () => S.picker.open(), 'ghost',
+    'Attach files to the follow-up question');
   const askButton = button('Ask', async () => {
     if (needText('the question') && await submitText()) {
       follow();
@@ -1640,17 +1615,18 @@ function barActions(d) {
   switch (d.status.phase) {
     case 'running':
       items.push(button(d.control.paused ? "Don't pause" : 'Pause after this round', () => control({ paused: !d.control.paused }), 'ghost'));
-      items.push(button('Stop', () => attempt(async () => { await api('POST', path('stop')); refreshSoon(); }), 'ghost danger'));
+      items.push(button('Stop', () => attempt(async () => { await api('POST', path('stop')); refreshSoon(); }), 'ghost danger',
+        'Stop the members now. You can continue the discussion later.'));
       primary = button(ask ? 'Queue the question' : 'Save note', async () => {
         if (needText(ask ? 'the question' : 'the note') && await submitText()) refreshSoon();
       });
       break;
     case 'finished':
       if (ask) {
-        items.push(button('One more round', () => request({ type: 'next' }), 'ghost'));
+        items.push(button('One more round', () => request({ type: 'next' }), 'ghost', oneMoreTitle(d)));
         primary = askButton;
       } else {
-        primary = button('One more round', withText(() => request({ type: 'next' })), 'primary');
+        primary = button('One more round', withText(() => request({ type: 'next' })), 'primary', oneMoreTitle(d));
       }
       break;
     case 'stopped':
@@ -1664,11 +1640,17 @@ function barActions(d) {
   const voted = currentRounds(d).some((r) => r.kind === 'vote' && r.vote);
   const last = d.rounds[d.rounds.length - 1];
   if (d.council && voted && last && last.kind !== 'vote' && ['paused', 'ready', 'finished'].includes(d.status.phase)) {
-    items.unshift(button('Vote again', () => request({ type: 'revote' }), 'ghost'));
+    items.unshift(button('Vote again', () => request({ type: 'revote' }), 'ghost',
+      'Every member answers again and the council votes again: for when it started from the wrong answer.'));
   }
   if (ask) items.unshift(attach);
   S.primary = primary;
   return [...items, primary];
+}
+
+function oneMoreTitle(d) {
+  return d.council ? 'The others review the shared answer once more and its author revises it, even after they agreed.'
+    : "Each comments on the other's answer and updates their own once more, even after they agreed.";
 }
 
 function drawBar(d) {
