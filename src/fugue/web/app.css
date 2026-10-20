@@ -494,6 +494,7 @@ button.link:hover { color: var(--text); }
   margin: 0 auto;
   display: grid;
   grid-template-columns: auto 1fr auto;
+  grid-template-areas: "mode text actions" "files files files" "hint hint hint";
   align-items: center;
   gap: 4px 10px;
   background: var(--panel);
@@ -503,7 +504,14 @@ button.link:hover { color: var(--text); }
   padding: 6px 6px 6px 8px;
 }
 .composer-box:focus-within { border-color: var(--faint); }
-.composer-box.open { align-items: end; }
+/* Open, the text gets the whole width and the controls move under it. */
+.composer-box.open { grid-template-areas: "text text text" "files files files" "mode hint actions"; padding-top: 10px; }
+#composer-mode { grid-area: mode; }
+#composer-text { grid-area: text; }
+#composer-actions { grid-area: actions; }
+#composer-files { grid-area: files; }
+#composer-hint { grid-area: hint; }
+.composer-box.open #composer-text { padding: 0 6px; }
 .bar-actions { display: flex; align-items: center; gap: 4px; }
 .bar-actions .btn.primary { margin-left: 4px; }
 #composer-mode {
@@ -532,7 +540,7 @@ button.link:hover { color: var(--text); }
   text-overflow: ellipsis;
 }
 .composer-box.open #composer-text { overflow-y: auto; white-space: pre-wrap; }
-#composer-hint { grid-column: 1 / -1; font-size: 12px; display: none; padding-left: 4px; }
+#composer-hint { font-size: 12px; display: none; padding-left: 4px; }
 .composer-box.open #composer-hint { display: block; }
 
 /* ---------- forms: new question and settings ---------- */
@@ -778,5 +786,5 @@ button.link.accent:hover { text-decoration: underline; }
 .file-chip .size { flex: none; color: var(--faint); white-space: nowrap; }
 .file-chip button { flex: none; border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 14px; }
 textarea.dropping, #composer-text.dropping { outline: 2px dashed var(--accent); outline-offset: 2px; }
-#composer-files { grid-column: 1 / -1; }
+
 #composer-files .file-chips { padding: 2px 4px 0; }
