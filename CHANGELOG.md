@@ -4,6 +4,7 @@ This file records the changes to fugue that someone using it would notice, newes
 
 ## 2026-10-20
 
+- Settings no longer shows Claude Code and Codex as logged out when the folder `fugue web` was started in has since been removed; it checks the tools from your home folder. The New question form's default folder falls back to your home folder in the same case.
 - The command-line help, `fugue delete`'s message and the transcript's note labels describe two to four members and all three tools, instead of two members and only Claude Code and Codex.
 - Comments, reviews and votes check any rewrite of your own material (an attached file, text in the question, a file in the folder) line by line against the source, and a claim stronger than the source counts as an objection.
 - Members check their own changed claims against the source before they hand in an update, merge, revision or closing version.
