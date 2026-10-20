@@ -1,6 +1,6 @@
 # fugue
 
-fugue asks two to four coding agents the same question and has them check each other's answers until no one objects. The members can be Claude Code, Codex and the DeepSeek Harness, in any mix, each with the model and effort level you choose. You watch the discussion live on a local web page (or in the terminal), add your own view whenever you want, and move it on when you're ready. Like the voices of a fugue, each member first states its own answer, then they answer each other until the lines fit together.
+fugue asks two to four coding agents the same question and has them check each other's answers, step by step, until no one objects or a round limit is reached. The members can be Claude Code, Codex and the DeepSeek Harness, in any mix, each with the model and effort level you choose. You watch the discussion live on a local web page (or in the terminal), add your own view whenever you want, and move it on when you're ready. Like the voices of a fugue, each member first states its own answer, then they answer each other until the lines fit together.
 
 ## Why use it
 
@@ -96,7 +96,7 @@ fugue runs each tool headless (`claude -p`, `codex exec`, `dsh --profile headles
 
 Members are never told which tool or model the others run. Each gets a letter for the whole discussion (A to D), drawn at random when it starts, so the first member you choose isn't always A. Every message after your first question tells the member its own letter and the others'; forwarded replies are marked with their author and step (`from="member B" step="2"`), so a member that cites a step means the same one you see; and members write about themselves as "I" and refer to each other only by letter, which means the same member to whoever reads a reply. The page, the transcript and `fugue status` show you who is who, for example "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)" when two members use the same tool.
 
-Members running the same model tend to make the same mistakes and agree on them, so the council catches less; different tools or models work best, and the page warns when two members run the same model.
+Members running the same model tend to make the same mistakes and agree on them, so they catch less; different tools or models work best, and the page warns when two members run the same model.
 
 The exact wording sent to the members is in [src/fugue/prompts.py](src/fugue/prompts.py); edit it there to change how they talk to each other.
 
