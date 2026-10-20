@@ -637,6 +637,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .ctx-block.src-m.codex .ctx-label { color: var(--codex); }
 .ctx-block.src-m.claude.alt .ctx-label { color: var(--claude-alt); }
 .ctx-block.src-m.codex.alt .ctx-label { color: var(--codex-alt); }
+/* An attached file, shown on the page. */
+#file-dialog { width: min(1000px, 94vw); height: 88vh; }
+#file-dialog[open] { display: flex; flex-direction: column; }
+#file-dialog .dialog-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-facts { flex: none; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.file-views { flex: none; }
+.file-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; padding: 16px; }
+.file-body > img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
+.file-body > iframe { flex: 1; width: 100%; border: none; border-radius: 8px; background: #fff; }
+.file-text pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.55; }
+.file-text.md { max-width: 820px; font-size: 14.5px; line-height: 1.7; }
+.file-text.prose pre { max-width: 820px; font-family: var(--sans); font-size: 14px; line-height: 1.7; }
+
 .context-foot { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--faint); }
 
 #banner {

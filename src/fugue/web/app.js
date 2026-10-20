@@ -642,7 +642,8 @@ function fileType(name) {
   return m ? m[1].toUpperCase() : 'FILE';
 }
 
-// The files attached to a question: images as small previews, the rest as links that open them.
+// The files attached to a question: images as small previews, the rest by type.
+// A click shows the file on the page; ⌘-click opens it in a new tab.
 function attachmentList(d, records) {
   if (!records || !records.length) return null;
   return el('div', { class: 'attachments' }, records.map((a) => el('a', {
@@ -650,11 +651,83 @@ function attachmentList(d, records) {
     href: fileUrl(d, a.name),
     target: '_blank',
     rel: 'noopener',
-    title: a.text ? `${a.name}: the members also get its text` : a.note ? `${a.name}: ${a.note}` : a.name,
+    title: `Show ${a.name}`,
+    onclick: (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+      e.preventDefault();
+      showFile(d, a);
+    },
   },
   a.kind === 'image' ? el('img', { src: fileUrl(d, a.name), alt: '' }) : el('span', { class: 'type' }, fileType(a.name)),
   el('span', { class: 'name' }, a.name),
   el('span', { class: 'size' }, fmtSize(a.size)))));
+}
+
+const KIND_NAMES = { image: 'Image', pdf: 'PDF', word: 'Word file', text: 'Text file', other: 'File' };
+const MAX_PREVIEW_CHARS = 400000;
+
+// One attached file on the page, with what the members get from it.
+function showFile(d, a) {
+  const dialog = $('#file-dialog');
+  const url = fileUrl(d, a.name);
+  const textUrl = a.text ? fileUrl(d, basename(a.text)) : null;
+  const facts = [KIND_NAMES[a.kind] || 'File', fmtSize(a.size), a.pages ? plural(a.pages, 'page') : null].filter(Boolean).join(' · ');
+  const body = el('div', { class: 'file-body' });
+  // A PDF the browser can show is shown as it is, with the text the members get one click away.
+  const views = a.kind === 'pdf' && navigator.pdfViewerEnabled && textUrl ? ['file', 'text'] : null;
+  const show = (view) => {
+    for (const b of dialog.querySelectorAll('.file-views button')) b.classList.toggle('on', b.dataset.view === view);
+    body.replaceChildren(filePreview(a, view === 'text' ? null : url, textUrl));
+  };
+  dialog.replaceChildren(
+    el('div', { class: 'dialog-head' },
+      el('h2', { title: a.name }, a.name),
+      el('span', { class: 'file-facts' }, facts),
+      views ? el('span', { class: 'layout-toggle file-views', role: 'group', 'aria-label': 'Show' },
+        el('button', { type: 'button', dataset: { view: 'file' }, onclick: () => show('file') }, 'PDF'),
+        el('button', { type: 'button', dataset: { view: 'text' }, onclick: () => show('text') }, 'Its text')) : null,
+      el('a', { class: 'btn small', href: url, download: a.name }, 'Download'),
+      el('button', { type: 'button', class: 'btn ghost small', onclick: () => dialog.close() }, 'Close')),
+    body,
+    el('div', { class: 'context-foot' }, whatMembersGet(a)));
+  show('file');
+  dialog.showModal();
+}
+
+function filePreview(a, url, textUrl) {
+  if (a.kind === 'image' && url) return el('img', { src: url, alt: a.name });
+  if (a.kind === 'pdf' && url && navigator.pdfViewerEnabled) return el('iframe', { src: url, title: a.name });
+  if (a.kind === 'text' && url) return textPreview(url, /\.(md|markdown)$/i.test(a.name) ? 'markdown' : 'plain');
+  if ((a.kind === 'pdf' || a.kind === 'word') && textUrl) return textPreview(textUrl, 'prose');
+  const why = a.note ? `There is no text to show: ${a.note}.` : "fugue can't show this kind of file.";
+  return el('p', { class: 'muted' }, `${why} Download it to open it.`);
+}
+
+// `how`: 'markdown' rendered, 'prose' (text taken out of a document) or 'plain' as it is.
+function textPreview(url, how) {
+  const markdown = how === 'markdown';
+  const node = el('div', { class: `file-text ${how}${markdown ? ' md' : ''}` }, el('p', { class: 'muted' }, 'Loading…'));
+  fetch(url).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`)))).then((text) => {
+    const cut = text.length > MAX_PREVIEW_CHARS;
+    const shown = cut ? text.slice(0, MAX_PREVIEW_CHARS) : text;
+    if (markdown) node.innerHTML = md(shown);
+    else node.replaceChildren(el('pre', {}, shown));
+    if (cut) node.append(el('p', { class: 'muted' }, `Showing the first ${MAX_PREVIEW_CHARS.toLocaleString()} characters. Download it for the rest.`));
+  }, () => node.replaceChildren(el('p', { class: 'muted' }, "Couldn't load the file. Download it to open it.")));
+  return node;
+}
+
+// What each member is given, said under the preview.
+function whatMembersGet(a) {
+  switch (a.kind) {
+    case 'image': return 'The members can open this image; Codex also gets it with its message.';
+    case 'pdf':
+    case 'word':
+      return a.text ? `The members get the ${a.kind === 'pdf' ? 'PDF' : 'Word file'} and the text fugue took out of it.`
+        : `The members get the file, but no text version: ${a.note || 'it has no text'}.`;
+    case 'text': return 'The members read this file as it is.';
+    default: return 'The members get the file and decide how to read it.';
+  }
 }
 
 function readAsBase64(file) {
@@ -2141,6 +2214,9 @@ function init() {
   $('.composer-box').addEventListener('focusin', () => setTimeout(sizeComposer));
   $('.composer-box').addEventListener('focusout', () => setTimeout(sizeComposer));
   $('#nav-backdrop').addEventListener('click', () => setNav(false));
+  for (const dialog of document.querySelectorAll('dialog')) {
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') setNav(false);
   });
