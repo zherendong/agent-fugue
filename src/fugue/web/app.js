@@ -1497,7 +1497,7 @@ async function drawStatus(box) {
   if (off.plugins.length) offList.push(`${plural(off.plugins.length, 'plugin')} (${off.plugins.map(short).join(', ')})`);
   if (off.mcp_servers.length) offList.push(`the ${off.mcp_servers.join(', ')} ${off.mcp_servers.length === 1 ? 'server' : 'servers'}`);
   box.replaceChildren(
-    TOOLS.map(toolRow),
+    ...TOOLS.map(toolRow),
     row('good', 'Codex extras',
       el('div', {}, `Off whenever Codex takes part in a discussion: ${offList.join(', ')}.`),
       el('div', { class: 'muted' }, "They could change files or act in your accounts, which Codex's read-only sandbox doesn't "
