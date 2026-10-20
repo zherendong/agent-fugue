@@ -523,6 +523,7 @@ def test_a_deepseek_member_runs_read_only_and_resumes_its_session(env):
     overlay = Path(first["args"][first["args"].index("--patch") + 1]).read_text()
     assert "model: \"deepseek-v4-pro\"" in overlay and "reasoningEffort: \"max\"" in overlay
     assert "policy: never" in overlay and "id: web-search-deepseek" in overlay  # the web is off
+    assert "- id: credentials\n  disabled: false\n" in overlay  # the key saved in dsh is used
     letter = letter_of(discussion, "dsh")
     session = discussion.state["sessions"][letter]
     assert session.startswith("session-") and all(c["session"] == session for c in later)
@@ -546,10 +547,22 @@ def test_a_failed_deepseek_run_says_why(env, monkeypatch):
 def test_dsh_status_finds_a_key_without_reading_it(env, monkeypatch):
     from fugue.settings import agent_status
 
-    assert agent_status("dsh")["logged_in"] is False
     home = Path(os.environ["DSH_HOME"])
+    report = agent_status("dsh")
+    assert report["logged_in"] is False
+    assert report["login"] == f"no DeepSeek API key: save one on dsh's Models page, or put DEEPSEEK_API_KEY in {home / '.env'}"
     home.mkdir(parents=True, exist_ok=True)
+    # dsh ignores the older flat layout and keys that aren't under `refs:`.
     (home / ".credentials.yaml").write_text("DEEPSEEK_API_KEY: sk-test\n")
+    assert agent_status("dsh")["logged_in"] is False
+    (home / ".credentials.yaml").write_text("version: 1\nrecords:\n  DEEPSEEK_API_KEY: sk-test\n")
+    assert agent_status("dsh")["logged_in"] is False
+    (home / ".env").write_text("export DEEPSEEK_API_KEY=sk-test\n")
+    assert agent_status("dsh")["login"] == "DeepSeek API key in dsh's .env"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    assert agent_status("dsh")["login"] == "DeepSeek API key from the environment"
+    # A key saved in dsh wins over the environment, as in dsh.
+    (home / ".credentials.yaml").write_text("version: 1\n# saved by dsh\nrefs:\n  # the API key\n  DEEPSEEK_API_KEY: sk-test\n")
     report = agent_status("dsh")
     assert report["logged_in"] and report["login"] == "DeepSeek API key saved in dsh" and "sk-test" not in str(report)
     assert report["version"] == "0.2.0-rc.2"

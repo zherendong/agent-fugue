@@ -110,19 +110,34 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess | None:
         return None
 
 
+def dsh_home() -> Path:
+    return Path(os.environ.get("DSH_HOME") or "~/.dsh").expanduser()
+
+
+def _lines(path: Path) -> list[str]:
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+
 def dsh_key_source() -> str | None:
-    """Where dsh would find a DeepSeek API key, without reading the key: the environment, its credentials file,
-    or its home .env."""
+    """Where fugue's dsh runs would find a DeepSeek API key, in dsh's order, by name only: saved in dsh (under
+    `refs:` in its credentials file; dsh ignores the older flat layout), the environment, or its home .env."""
+    in_refs = False
+    for line in _lines(dsh_home() / ".credentials.yaml"):
+        name = line.split(":")[0].strip()
+        if not name or name.startswith("#"):
+            continue
+        if line[:1].strip():  # a top-level key starts a new section
+            in_refs = name == "refs"
+        elif in_refs and name == "DEEPSEEK_API_KEY":
+            return "saved in dsh"
     if os.environ.get("DEEPSEEK_API_KEY"):
         return "from the environment"
-    home = Path(os.environ.get("DSH_HOME") or "~/.dsh").expanduser()
-    for path, label in ((home / ".credentials.yaml", "saved in dsh"), (home / ".env", "in dsh's .env")):
-        try:
-            if any(line.split(":")[0].split("=")[0].strip() == "DEEPSEEK_API_KEY"
-                   for line in path.read_text(encoding="utf-8").splitlines()):
-                return label
-        except OSError:
-            continue
+    if any(line.split("=")[0].removeprefix("export ").strip() == "DEEPSEEK_API_KEY"
+           for line in _lines(dsh_home() / ".env")):
+        return "in dsh's .env"
     return None
 
 
@@ -146,8 +161,9 @@ def agent_status(agent: str) -> dict:
     elif agent == "dsh":
         where = dsh_key_source()
         found["logged_in"] = where is not None
-        found["login"] = (f"DeepSeek API key {where}" if where
-                          else "no DeepSeek API key: set DEEPSEEK_API_KEY, or save one in dsh's settings")
+        found["login"] = (f"DeepSeek API key {where}" if where else
+                          f"no DeepSeek API key: save one on dsh's Models page, or put DEEPSEEK_API_KEY in "
+                          f"{dsh_home() / '.env'}")
     else:
         login = _run([path, "login", "status"])
         text = ((login.stdout or login.stderr).strip() if login else "") or "unknown"
