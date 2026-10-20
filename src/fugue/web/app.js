@@ -1128,7 +1128,7 @@ function drawContext() {
   const dialog = $('#context-dialog');
   dialog.replaceChildren(
     el('div', { class: 'dialog-head' },
-      el('h2', {}, `What ${d.members[letter].name} saw in round ${round}`),
+      el('h2', {}, `What ${memberTitle(d, letter)} (member ${letter}) saw in round ${round}`),
       el('button', { type: 'button', class: 'btn small', onclick: () => copy(shown.map((i) => i.text).join('\n\n')) }, 'Copy'),
       el('button', { type: 'button', class: 'btn ghost small', onclick: () => dialog.close() }, 'Close')),
     el('div', { class: 'context-bar' },
@@ -1138,8 +1138,8 @@ function drawContext() {
       el('div', { class: 'legend' },
         legend('src-you', 'You'),
         legend('src-fugue', "fugue's instructions"),
-        legend(`src-m ${memberClass(d, other)}`, `Member ${other}`),
-        legend(`src-m ${memberClass(d, letter)}`, `Member ${letter}'s own replies`))),
+        legend(`src-m ${memberClass(d, other)}`, d.members[other].name),
+        legend(`src-m ${memberClass(d, letter)}`, `${d.members[letter].name}'s own replies`))),
     el('div', { class: 'context-body' }, shown.map((item) => contextItem(d, letter, item))),
     el('div', { class: 'context-foot' },
       "What fugue sent this member and what it replied, in order. Not included: its tool's own system prompt, "
@@ -1148,7 +1148,7 @@ function drawContext() {
 
 function contextItem(d, letter, item) {
   if (item.role === 'reply') {
-    return contextBlock(`src-m ${memberClass(d, letter)}`, `Round ${item.round} · member ${letter} replied`, item.text);
+    return contextBlock(`src-m ${memberClass(d, letter)}`, `Round ${item.round} · ${d.members[letter].name} replied`, item.text);
   }
   if (item.kind === 'answer' && item.round === 0) {
     // The first message is your question, sent exactly as you wrote it.
@@ -1172,7 +1172,7 @@ function contextSegments(d, text, letter) {
     if (m[1]) {
       const named = m[2].match(/member ([A-Z])/);
       const sender = named && d.members[named[1]] ? named[1] : otherLetter(d, letter);
-      out.push(contextBlock(`src-m ${memberClass(d, sender)}`, `Member ${sender}'s ${m[1]}, round ${m[3]}`, m[4]));
+      out.push(contextBlock(`src-m ${memberClass(d, sender)}`, `${d.members[sender].name}'s ${m[1]}, round ${m[3]}`, m[4]));
     } else if (m[5] !== undefined) {
       out.push(contextBlock('src-you', 'Your follow-up question', m[5]));
     } else {
