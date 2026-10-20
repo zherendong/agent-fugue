@@ -297,6 +297,7 @@ button.link:hover { color: var(--text); }
   cursor: pointer;
 }
 .tabs button.on { color: var(--text); border-bottom-color: var(--text); }
+.tabs .model { color: var(--muted); font-size: 12.5px; }
 .tabs .letter { color: var(--faint); font-size: 12.5px; }
 
 /* Your own entries: notes and follow-up questions. */
@@ -319,7 +320,8 @@ button.link:hover { color: var(--text); }
 .mdot.claude.alt { background: var(--claude-alt); }
 .mdot.codex.alt { background: var(--codex-alt); }
 .col-head .who { font-weight: 600; }
-.col-head .letter, .col-head .sub { color: var(--faint); }
+.col-head .model { color: var(--muted); white-space: nowrap; }
+.col-head .letter, .col-head .sub { color: var(--faint); white-space: nowrap; }
 .col-head .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .col-head .state { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .status-running .col-head .state { color: var(--accent); }

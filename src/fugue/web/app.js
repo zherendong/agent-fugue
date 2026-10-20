@@ -618,7 +618,7 @@ function statusText(d) {
     const last = d.rounds[d.rounds.length - 1];
     const working = last ? letters(d).filter((letter) => last.entries[letter] && last.entries[letter].status === 'running') : [];
     let text = working.length === 2 ? 'Both members are working'
-      : working.length === 1 ? `Member ${working[0]} is working` : 'Starting';
+      : working.length === 1 ? `${memberTitle(d, working[0])} (member ${working[0]}) is working` : 'Starting';
     if (d.control.paused) text += ' · will pause after this round';
     return text;
   }
@@ -715,10 +715,29 @@ function otherLetter(d, letter) {
   return letters(d).find((other) => other !== letter);
 }
 
-// The other member as the card for `letter` mentions them: with the letter when the two names match.
+// How the page names members to you; the members themselves only know letters.
+
+// The model and effort, e.g. "Opus 5.5 · xhigh", "GPT-6.1-Sol" or "default model".
+function modelLabel(d, letter) {
+  const m = d.members[letter];
+  let model = m.model ? modelName(m.tool, m.model) : 'default model';
+  if (model.startsWith(`${NAMES[m.tool]} `)) model = model.slice(NAMES[m.tool].length + 1);
+  return m.effort ? `${model} · ${m.effort}` : model;
+}
+
+// "Claude · Opus 5.5 · xhigh"
+function memberTitle(d, letter) {
+  return `${NAMES[d.members[letter].tool]} · ${modelLabel(d, letter)}`;
+}
+
+// Where space is short: the tool, or the letter when both members use the same tool.
+function shortWho(d, letter) {
+  const tool = d.members[letter].tool;
+  return letters(d).every((other) => d.members[other].tool === tool) ? `member ${letter}` : NAMES[tool];
+}
+
 function otherName(d, letter) {
-  const other = d.members[otherLetter(d, letter)];
-  return other.short_name === d.members[letter].short_name ? other.name : other.short_name;
+  return shortWho(d, otherLetter(d, letter));
 }
 
 // Members take their tool's colour; when both use the same tool, the second gets another shade.
@@ -821,14 +840,18 @@ function pairOf(d, shown, make) {
     return el('div', { class: `pair${shown.length === 1 ? ' one' : ''}` }, shown.map(make));
   }
   const tab = shown.includes(S.tab) ? S.tab : shown[0];
-  return el('div', { class: 'pair one' },
+  return el('div', { class: 'pair one tabbed' },
     el('div', { class: 'tabs', role: 'tablist' }, shown.map((letter) => el('button', {
       type: 'button',
       role: 'tab',
       class: letter === tab ? 'on' : '',
       'aria-selected': String(letter === tab),
       onclick: () => { S.tab = letter; drawDiscussion(); },
-    }, el('span', { class: `mdot ${memberClass(d, letter)}` }), d.members[letter].short_name, el('span', { class: 'letter' }, ` · member ${letter}`)))),
+    },
+    el('span', { class: `mdot ${memberClass(d, letter)}` }),
+    NAMES[d.members[letter].tool],
+    el('span', { class: 'model' }, modelLabel(d, letter)),
+    el('span', { class: 'letter' }, `member ${letter}`)))),
     make(tab));
 }
 
@@ -935,7 +958,7 @@ function historyRound(d, r) {
     tally(r),
     sentNotes(d, r).length ? el('span', { class: 'you-mark' }, 'with your note') : null,
     el('span', { class: 'spacer' }),
-    el('span', { class: 'brief' }, shown.map((letter) => `${letter} ${stateText(r.entries[letter])}`).join(' · '))),
+    el('span', { class: 'brief' }, shown.map((letter) => `${shortWho(d, letter)} ${stateText(r.entries[letter])}`).join(' · '))),
     open ? el('div', { class: 'hround-body' },
       r.kind === 'answer' && r.index > 0 ? followupBlock(r.question) : null,
       sentNotes(d, r),
@@ -949,11 +972,11 @@ function tally(r) {
   if (r.kind === 'comment') {
     if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'tally ok' }, 'no objections');
     return el('span', { class: 'tally' },
-      `objections: ${done.map((letter) => `${letter} ${r.entries[letter].objections ?? '?'}`).join(', ')}`);
+      `objections: ${done.map((letter) => `${shortWho(d, letter)} ${r.entries[letter].objections ?? '?'}`).join(', ')}`);
   }
   if (r.kind === 'review' || r.kind === 'discuss') {
     return el('span', { class: 'tally' },
-      `disagreements left: ${done.map((letter) => `${letter} ${r.entries[letter].remaining ?? '?'}`).join(', ')}`);
+      `disagreements left: ${done.map((letter) => `${shortWho(d, letter)} ${r.entries[letter].remaining ?? '?'}`).join(', ')}`);
   }
   return null;
 }
@@ -982,7 +1005,8 @@ function stateText(e) {
 function columnHead(d, letter, sub, state) {
   return el('header', { class: 'col-head' },
     el('span', { class: `mdot ${memberClass(d, letter)}` }),
-    el('span', { class: 'who', title: runsWith(d, letter) }, d.members[letter].short_name),
+    el('span', { class: 'who', title: runsWith(d, letter) }, NAMES[d.members[letter].tool]),
+    el('span', { class: 'model' }, modelLabel(d, letter)),
     el('span', { class: 'letter' }, `member ${letter}`),
     sub ? el('span', { class: 'sub' }, sub) : null,
     el('span', { class: 'state' }, state));
