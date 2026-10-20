@@ -559,6 +559,84 @@ function scrollToBottom() {
   main.scrollTop = main.scrollHeight;
 }
 
+// ---------------------------------------------------------------- attached files
+
+const MAX_ATTACH_BYTES = 50 * 1024 * 1024;
+
+function fmtSize(n) {
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function fileUrl(d, name) {
+  return `/api/discussions/${encodeURIComponent(d.id)}/attachments/${encodeURIComponent(name)}?token=${encodeURIComponent(TOKEN)}`;
+}
+
+function fileType(name) {
+  const m = name.match(/\.([A-Za-z0-9]{1,5})$/);
+  return m ? m[1].toUpperCase() : 'FILE';
+}
+
+// The files attached to a question: images as small previews, the rest as links that open them.
+function attachmentList(d, records) {
+  if (!records || !records.length) return null;
+  return el('div', { class: 'attachments' }, records.map((a) => el('a', {
+    class: `attachment k-${a.kind}`,
+    href: fileUrl(d, a.name),
+    target: '_blank',
+    rel: 'noopener',
+    title: a.text ? `${a.name}: the members also get its text` : a.note ? `${a.name}: ${a.note}` : a.name,
+  },
+  a.kind === 'image' ? el('img', { src: fileUrl(d, a.name), alt: '' }) : el('span', { class: 'type' }, fileType(a.name)),
+  el('span', { class: 'name' }, a.name),
+  el('span', { class: 'size' }, fmtSize(a.size)))));
+}
+
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Files chosen to go with a question: an "Attach files" link, dropping or pasting onto
+// `target`, and a chip for each file with a × to take it off again.
+function filePicker({ target, onadd } = {}) {
+  const files = [];
+  const input = el('input', { type: 'file', multiple: true, hidden: true });
+  const chips = el('span', { class: 'file-chips' });
+  const draw = () => chips.replaceChildren(...files.map((file, i) => el('span', { class: 'file-chip', title: file.name },
+    el('span', { class: 'name' }, file.name),
+    el('span', { class: 'size' }, fmtSize(file.size)),
+    el('button', { type: 'button', 'aria-label': `Remove ${file.name}`, onclick: () => { files.splice(i, 1); draw(); } }, '×'))));
+  const add = (list) => {
+    if (!list || !list.length) return;
+    for (const file of list) files.push(file);
+    draw();
+    if (onadd) onadd();
+  };
+  input.addEventListener('change', () => { add(input.files); input.value = ''; });
+  if (target) {
+    target.addEventListener('dragover', (e) => { e.preventDefault(); target.classList.add('dropping'); });
+    target.addEventListener('dragleave', () => target.classList.remove('dropping'));
+    target.addEventListener('drop', (e) => { e.preventDefault(); target.classList.remove('dropping'); add(e.dataTransfer.files); });
+    target.addEventListener('paste', (e) => {
+      if (e.clipboardData && e.clipboardData.files.length) { e.preventDefault(); add(e.clipboardData.files); }
+    });
+  }
+  const node = el('span', { class: 'file-picker' }, chips, input);
+  node.files = files;
+  node.open = () => input.click();
+  node.clear = () => { files.length = 0; draw(); };
+  node.encode = async () => {
+    const total = files.reduce((sum, file) => sum + file.size, 0);
+    if (total > MAX_ATTACH_BYTES) throw new Error('The attachments come to more than 50 MB.');
+    return Promise.all(files.map(async (file) => ({ name: file.name, data: await readAsBase64(file) })));
+  };
+  return node;
+}
+
 // ---------------------------------------------------------------- one discussion
 // The page reads like a document: the question as its title, one line saying
 // where things stand with the one button that moves it on, then the answers.
@@ -642,11 +720,14 @@ function openObjections(d) {
 // The full question, when the title (its first line) doesn't already say it all.
 function questionBlock(d) {
   const question = d.question.trim();
-  if (question === d.title.trim()) return null;
-  const long = question.length > 240 || question.split('\n').length > 4;
+  const files = attachmentList(d, d.attachments);
+  const showText = question !== d.title.trim();
+  if (!showText && !files) return null;
+  const long = showText && (question.length > 240 || question.split('\n').length > 4);
   const open = S.questionOpen.has(d.id);
   return el('div', { class: `question${long && !open ? ' clamped' : ''}` },
-    el('div', { class: 'md', html: md(question) }),
+    showText ? el('div', { class: 'md', html: md(question) }) : null,
+    files,
     long ? el('button', {
       class: 'link',
       type: 'button',
@@ -881,15 +962,18 @@ function pairOf(d, shown, make) {
     make(tab));
 }
 
-function followupBlock(question) {
-  return youEntry('follow-up question', question);
+function followupBlock(r) {
+  const entry = youEntry('follow-up question', r.question);
+  const files = attachmentList(S.detail, r.attachments);
+  if (files) entry.append(files);
+  return entry;
 }
 
 // The round in progress, or just done, of a discussion that hasn't finished.
 function currentRoundSection(d, r) {
   return el('section', { class: 'answers', id: `round-${r.index}` },
     sectionHead(`Round ${r.index}: ${roundTitle(r)}`, tally(r)),
-    r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r.question) : null,
+    r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r) : null,
     sentNotes(d, r),
     r.kind === 'vote' ? voteBoard(d, r) : null,
     pairOf(d, letters(d).filter((letter) => r.entries[letter]), (letter) => card(r, letter)));
@@ -968,7 +1052,7 @@ function resultSection(d) {
   const asked = currentRounds(d)[0];
   return el('section', { class: 'answers', id: 'round-result' },
     sectionHead(d.council && shown.length === 1 ? "The council's answer" : 'Their latest answers'),
-    asked.index > 0 ? followupBlock(asked.question) : null,
+    asked.index > 0 ? followupBlock(asked) : null,
     pairOf(d, shown, (letter) => resultColumn(d, letter, latest[letter])));
 }
 
@@ -1031,7 +1115,7 @@ function historyRound(d, r) {
     el('span', { class: 'spacer' }),
     el('span', { class: 'brief' }, shown.map((letter) => `${shortWho(d, letter)} ${stateText(r.entries[letter])}`).join(' · '))),
     open ? el('div', { class: 'hround-body' },
-      r.kind === 'answer' && r.index > 0 ? followupBlock(r.question) : null,
+      r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r) : null,
       sentNotes(d, r),
       pairOf(d, shown, (letter) => card(r, letter))) : null);
 }
@@ -1353,12 +1437,15 @@ async function submitText() {
   const text = textValue();
   if (!text) return true;
   const ok = await attempt(async () => {
-    if (S.mode === 'ask') await api('POST', path('requests'), { type: 'ask', question: text });
-    else await api('POST', path('notes'), { text, to: S.mode });
+    if (S.mode === 'ask') {
+      const files = await S.picker.encode();
+      await api('POST', path('requests'), { type: 'ask', question: text, attachments: files });
+    } else await api('POST', path('notes'), { text, to: S.mode });
     return true;
   });
   if (!ok) return false;
   $('#composer-text').value = '';
+  if (S.mode === 'ask') S.picker.clear();
   sizeComposer();
   return true;
 }
@@ -1377,6 +1464,8 @@ function barActions(d) {
   const withText = (then) => async () => {
     if (await submitText()) await then();
   };
+  // Files go with a follow-up question; dropping or pasting one switches the box to it.
+  const attach = button(S.picker.files.length ? `Attach (${S.picker.files.length})` : 'Attach', () => S.picker.open(), 'ghost');
   const askButton = button('Ask', async () => {
     if (needText('the question') && await submitText()) {
       follow();
@@ -1414,6 +1503,7 @@ function barActions(d) {
   if (d.council && voted && last && last.kind !== 'vote' && ['paused', 'ready', 'finished'].includes(d.status.phase)) {
     items.unshift(button('Vote again', () => request({ type: 'revote' }), 'ghost'));
   }
+  if (ask) items.unshift(attach);
   S.primary = primary;
   return [...items, primary];
 }
@@ -1753,29 +1843,42 @@ async function showNewQuestion() {
     },
   }, 'Change');
 
+  const cwdInput = el('input', {
+    id: 'cwd', name: 'cwd', type: 'text', list: 'folders', value: cwdDefault, spellcheck: 'false',
+    placeholder: 'No folder: the members see only the question and its attachments',
+    title: 'The members can read everything in this folder and run read-only commands, but not change files.',
+  });
+  const question = el('textarea', {
+    id: 'q',
+    name: 'question',
+    rows: 8,
+    required: true,
+    'aria-label': 'Question',
+    placeholder: 'What should the members answer? Each answers on its own first. Drop or paste files here to attach them.',
+    onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
+  });
+  const picker = filePicker({ target: question });
   const form = el('form', { class: 'form new-question', onsubmit: (e) => { e.preventDefault(); start(form); } },
     el('h1', {}, navToggle(), 'New question'),
     missing.length
       ? el('div', { class: 'warning' }, `The server can't find the ${missing.join(' and ')} command on its PATH, so members can't use it.`)
       : null,
-    el('textarea', {
-      id: 'q',
-      name: 'question',
-      rows: 8,
-      required: true,
-      'aria-label': 'Question',
-      placeholder: 'What should the members answer? Each answers on its own first.',
-      onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
-    }),
+    question,
+    el('div', { class: 'attach-row' },
+      el('button', { type: 'button', class: 'link accent', onclick: () => picker.open() }, 'Attach files'),
+      el('span', { class: 'muted' }, 'PDF, Word, images or text, up to 50 MB'),
+      picker),
     el('div', { class: 'folder-row' },
       el('label', { for: 'cwd' }, 'In'),
-      el('input', { id: 'cwd', name: 'cwd', type: 'text', list: 'folders', value: cwdDefault, required: true, spellcheck: 'false', title: 'The members can read everything in this folder and run read-only commands, but not change files.' }),
+      cwdInput,
+      el('button', { type: 'button', class: 'link', title: 'Ask without a project folder', onclick: () => { cwdInput.value = ''; cwdInput.focus(); } }, 'No folder'),
       el('datalist', { id: 'folders' }, [...new Set([...folders.recent, folders.default])].map((f) => el('option', { value: f })))),
     el('div', { class: 'setup-summary' }, summary, change),
     options,
     el('div', { class: 'submit' },
       el('button', { class: 'btn primary', type: 'submit' }, 'Ask'),
       el('span', { class: 'muted' }, '⌘↩')));
+  form.picker = picker;
   $('#content').replaceChildren(form);
   updateNavCounts();
   $('#main').scrollTop = 0;
@@ -1790,10 +1893,11 @@ async function start(form) {
   const data = Object.fromEntries(new FormData(form));
   const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
-  prefs({ cwd: data.cwd });
-  const created = await attempt(() => api('POST', '/api/discussions', {
+  if (data.cwd.trim()) prefs({ cwd: data.cwd });
+  const created = await attempt(async () => api('POST', '/api/discussions', {
     question: data.question,
-    cwd: data.cwd,
+    cwd: data.cwd.trim(),  // empty: no folder
+    attachments: await form.picker.encode(),
     max_rounds: Number(data.max_rounds),
     pause_after_each_round: data.pause === 'on',
     web: data.web === 'on',
@@ -1910,6 +2014,11 @@ async function drawStatus(box) {
 // ---------------------------------------------------------------- start up
 
 function init() {
+  S.picker = filePicker({
+    target: $('#composer-text'),
+    onadd: () => { S.modeChosen = true; setMode('ask'); },
+  });
+  $('#composer-files').append(S.picker);
   $('#composer-mode').addEventListener('change', (e) => {
     S.modeChosen = true;
     setMode(e.target.value);
