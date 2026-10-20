@@ -14,7 +14,7 @@ import pytest
 from fugue import cli, engine
 from fugue.engine import parse_objections, plan
 from fugue.store import DEFAULT_CONTROL, Discussion, list_discussions
-from fugue.transcript import demote_headings
+from fugue.transcript import demote_headings, resume_command
 
 FAKES = Path(__file__).parent / "fakes"
 
@@ -534,6 +534,11 @@ def test_a_deepseek_member_runs_read_only_and_resumes_its_session(env):
     texts = [e["text"] for e in events(discussion) if e["type"] == "activity" and e["member"] == letter]
     assert "grep 'cache' in src" in texts and "no matches" in texts and "Looking for the cache code first." in texts
     assert discussion.name(letter) == f"DeepSeek (member {letter})"
+    # Its resume command continues the session with the settings of its last run.
+    last_overlay = discussion.log_stem(discussion.rounds[-1]["index"], letter).with_suffix(".dsh-patch.yml")
+    assert last_overlay.exists() and last_overlay != Path(first["args"][first["args"].index("--patch") + 1])
+    assert resume_command(discussion, letter, session) == (
+        f'cd {discussion.cwd} && dsh --profile headless --patch {last_overlay} --session-id {session} "<your message>"')
 
 
 def test_a_failed_deepseek_run_says_why(env, monkeypatch):

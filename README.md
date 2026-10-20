@@ -140,14 +140,15 @@ Questions and notes can also come from a file (`-f question.md`), from stdin (`-
 
 ### Continuing in an agent yourself
 
-Both members' sessions are ordinary sessions of their tool. `fugue status` (or "Copy resume command for member A" in a discussion's ⋯ on the page) gives you, for example:
+The members' sessions are ordinary sessions of their tool. `fugue status` (or "Copy resume command for member A" in a discussion's ⋯ on the page) gives you, for example:
 
 ```
 cd ~/code/my-repo && claude --resume 6f1c...
 cd ~/code/my-repo && codex resume 0199...
+cd ~/code/my-repo && dsh --profile headless --patch ~/.fugue/discussions/.../logs/03-C.dsh-patch.yml --session-id session-7a2e... "<your message>"
 ```
 
-Run either to continue in that agent's interactive interface, with everything from the discussion in its memory, for instance to have it implement the agreed plan.
+Run the Claude or Codex one to continue in that agent's interactive interface, with everything from the discussion in its memory, for instance to have it implement the agreed plan. The DeepSeek Harness opens a session by id only in headless mode, so its command sends one message (put yours in place of `<your message>`) and prints the answer; run it again for the next message. It uses the settings of the member's last run in the discussion (model, effort, and the API key saved in dsh), but not the discussion's read-only mode, so the agent can change files in the project.
 
 ## Settings
 
