@@ -11,7 +11,7 @@ from typing import Callable
 from . import attachments, council, transcript
 from .agents import DSH_ENV, AgentCall, claude_command, codex_command, dsh_command, dsh_overlay, find_binary
 from .prompts import build_prompt, join_letters
-from .store import TOOL_NAMES, Discussion, FugueError, now_iso
+from .store import TOOL_NAMES, Discussion, FugueError, now_iso, step_number
 from .streams import ClaudeStream, CodexStream, DshStream, Outcome
 
 # -- what each round contains
@@ -326,7 +326,7 @@ def step_label(rounds: list[dict], step: dict | None, in_council: bool = False) 
     if step is None:
         return None
     if step["action"] == "retry":
-        return f"retry round {rounds[-1]['index']} for the members that didn't finish"
+        return f"retry step {step_number(rounds[-1]['index'])} for the members that didn't finish"
     if in_council and step["action"] == "revote":
         return council.step_label(rounds, "reopen")
     if in_council and step["action"] == "next":
@@ -357,12 +357,12 @@ def describe(discussion: Discussion) -> dict:
     if discussion.runner_pid() is not None:
         working = [short_name(discussion, a) for a, e in (last or {"entries": {}})["entries"].items()
                    if e["status"] == "running"]
-        label = f"Round {last['index']}: {join_letters(working)} working" if working else "Running"
+        label = f"Step {step_number(last['index'])}: {join_letters(working)} working" if working else "Running"
         return {"phase": "running", "label": label, "needs_you": False, "next": next_step}
     if last and not is_complete(last):
         failed = {a: e["error"] for a, e in last["entries"].items()
                   if e["status"] == "failed" and e.get("error") not in (None, "stopped", "interrupted")}
-        label = f"Stopped in round {last['index']}"
+        label = f"Stopped in step {step_number(last['index'])}"
         if failed:
             label += f": {join_letters([short_name(discussion, a) for a in failed])} failed"
         detail = state.get("problem") or "; ".join(f"{discussion.name(a)}: {error}" for a, error in failed.items())
@@ -370,18 +370,19 @@ def describe(discussion: Discussion) -> dict:
     if plan(state, control, requests) is not None:
         return {"phase": "ready", "label": f"Ready: next, {next_step}", "needs_you": True, "next": next_step}
     if control["paused"] and next_step:
-        label = f"Paused after round {last['index']}" if last else "Paused"
+        label = f"Paused after step {step_number(last['index'])}" if last else "Paused"
         return {"phase": "paused", "label": label, "detail": state.get("problem", ""), "needs_you": True,
                 "next": next_step}
     if last and agreed(last):
-        return {"phase": "finished", "label": f"Agreed in round {last['index']}", "needs_you": False, "next": None}
+        return {"phase": "finished", "label": f"Agreed in step {step_number(last['index'])}", "needs_you": False,
+                "next": None}
     comments = [rnd for rnd in current_question(rounds)
                 if rnd["kind"] == "comment" or (in_council and rnd["kind"] == "review")]
     detail = ""
     if comments:
         counts = ", ".join(f"{discussion.name(a)} {e.get('objections') if e.get('objections') is not None else '?'}"
                            for a, e in comments[-1]["entries"].items())
-        detail = f"Objections still open after round {comments[-1]['index']}: {counts}."
+        detail = f"Objections still open after step {step_number(comments[-1]['index'])}: {counts}."
     label = "Finished at the round limit" if comments else "Finished"
     return {"phase": "finished", "label": label, "detail": detail, "needs_you": False, "next": None}
 

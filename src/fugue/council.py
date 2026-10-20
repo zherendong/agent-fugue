@@ -94,7 +94,7 @@ def wants_new_vote(rounds: list[dict]) -> str | None:
         return "most reviewers said another starting point would have been clearly better"
     totals = [total_objections(rnd) for rnd in reviews[-3:]]
     if len(totals) == 3 and None not in totals and totals[2] > 0 and totals[2] >= totals[1] >= totals[0]:
-        return "the objections haven't gone down for two rounds"
+        return "the objections haven't gone down over the last two reviews"
     return None
 
 

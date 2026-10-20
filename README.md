@@ -13,19 +13,19 @@ Sending one question to two agents covers more edge cases than either one alone.
 
 ## How it works
 
-**How fugue talks to the agents.** It runs their own command-line tools headless (`claude -p`, `codex exec` and `dsh --profile headless`), so each agent keeps its normal tools, project instructions (`CLAUDE.md`, `AGENTS.md`) and its ability to read the code. Each agent has one session for the whole discussion, and fugue resumes it every round (`claude --resume`, `codex exec resume`, `dsh … --session-id`). So each agent remembers its own earlier reasoning, and fugue only sends what is new. While an agent works, fugue reads its live output (`--output-format stream-json` and `--json`) and turns it into steps you can watch: "Read src/cache.py", "$ rg -n cache src", how far Claude has got while it thinks ("Thinking: about 12k tokens so far"; at high effort it can think for minutes before writing), and the reply as it is written.
+**How fugue talks to the agents.** It runs their own command-line tools headless (`claude -p`, `codex exec` and `dsh --profile headless`), so each agent keeps its normal tools, project instructions (`CLAUDE.md`, `AGENTS.md`) and its ability to read the code. Each agent has one session for the whole discussion, and fugue resumes it at every step (`claude --resume`, `codex exec resume`, `dsh … --session-id`). So each agent remembers its own earlier reasoning, and fugue only sends what is new. While an agent works, fugue reads its live output (`--output-format stream-json` and `--json`) and turns it into actions you can watch: "Read src/cache.py", "$ rg -n cache src", how far Claude has got while it thinks ("Thinking: about 12k tokens so far"; at high effort it can think for minutes before writing), and the reply as it is written.
 
-**Two members.** The members are equal; there are no roles. Each member is a tool (Claude Code, Codex or the DeepSeek Harness) with a model, an effort level and any extra arguments, and members can use the same tool, for example two Codex members with different models. With two members, every round both take part, in parallel, and both do the same job:
+**Two members.** The members are equal; there are no roles. Each member is a tool (Claude Code, Codex or the DeepSeek Harness) with a model, an effort level and any extra arguments, and members can use the same tool, for example two Codex members with different models. With two members, both take part in every step, in parallel, and both do the same job:
 
-- *Round 0, independent answers.* Both get your question unchanged, in separate sessions. Neither sees the other's answer.
-- *Comment rounds.* Each reads the other's current answer and comments on it: what it got right that it had missed, what is wrong or unsupported (checking the other's claims with its tools rather than trusting them), and what is missing. Each comment ends with `Objections: N`: the problems in that answer that would change its conclusions or recommendations. Smaller points are listed as suggestions and not counted, so both members count the same way.
-- *Update rounds.* Each reads the comments on its own answer and writes its full updated answer, then, after it, says for each objection whether it accepts it, accepts part of it, or turns it down and why. Points still in dispute are marked in the answer with both views.
+- *Step 1, independent answers.* Both get your question unchanged, in separate sessions. Neither sees the other's answer.
+- *Comment steps.* Each reads the other's current answer and comments on it: what it got right that it had missed, what is wrong or unsupported (checking the other's claims with its tools rather than trusting them), and what is missing. Each comment ends with `Objections: N`: the problems in that answer that would change its conclusions or recommendations. Smaller points are listed as suggestions and not counted, so both members count the same way.
+- *Update steps.* Each reads the comments on its own answer and writes its full updated answer, then, after it, says for each objection whether it accepts it, accepts part of it, or turns it down and why. Points still in dispute are marked in the answer with both views.
 
-Comments and updates alternate. Each round only uses what the round before it produced, so no message has to keep track of replies still being written: comments are always about the other's answer as it stands now, which was written after reading every earlier comment.
+Comments and updates alternate. Each step only uses what the step before it produced, so no message has to keep track of replies still being written: comments are always about the other's answer as it stands now, which was written after reading every earlier comment.
 
-It stops when a comment round has no objections on either side (they agree), or after the round limit (2 rounds of comments and updates by default). The result is the members' latest answers: if they agree, they say the same thing; if not, each marks what is still disputed.
+It stops when a comment step has no objections on either side (they agree), or after the round limit (2 rounds of comments and updates by default; a round is a comment step and the update step after it). The result is the members' latest answers: if they agree, they say the same thing; if not, each marks what is still disputed.
 
-**Three or four members.** Everyone reading and rewriting everyone's answer every round would cost too much, so a council of three or four works from one shared answer:
+**Three or four members.** Everyone reading and rewriting everyone's answer at every step would cost too much, so a council of three or four works from one shared answer:
 
 - *Independent answers*, as above.
 - *Vote.* Each member ranks the other members' answers (never its own), each seeing them in its own random order, and says what each gets right and the problems that would change its conclusions. Every ballot gives an answer one point for every answer it ranks below it; the answer with the most points is the starting point (a tie is drawn at random). A ballot without a readable ranking isn't counted, and the page says why.
@@ -33,19 +33,21 @@ It stops when a comment round has no objections on either side (they agree), or 
 - *Review.* The other members review the result: objections (including their own points left out or misrepresented), suggestions, and whether another starting point would clearly have been better.
 - *Revise.* The author revises: the full answer first, then a response to each objection and the points it still hasn't taken.
 
-Reviews and revisions alternate until no reviewer objects, or until the round limit (rounds of review and revision) is reached; the last revision is reviewed too, so you see what is still open. When most reviewers say the starting point was wrong, or the objections haven't gone down for two rounds, everyone answers again and the council votes again, once per question on its own; "Vote again" (or `fugue revote`) asks for it any time. Votes and reviews stay symmetric: every member ranks, and every member but the author reviews, so no answer wins by who wrote it. The result is the council's one answer, with the points it didn't take and any objections still open.
+Reviews and revisions alternate until no reviewer objects, or until the round limit (rounds of a review and a revision) is reached; the last revision is reviewed too, so you see what is still open. When most reviewers say the starting point was wrong, or the objections haven't gone down over the last two reviews, everyone answers again and the council votes again, once per question on its own; "Vote again" (or `fugue revote`) asks for it any time. Votes and reviews stay symmetric: every member ranks, and every member but the author reviews, so no answer wins by who wrote it. The result is the council's one answer, with the points it didn't take and any objections still open.
 
-**Hidden names, fixed letters.** The members are never told which agent or model the other is. Each gets a letter for the whole discussion, member A or member B, drawn at random when the discussion starts, so the first member you choose isn't always "A". Every message from round 1 on says "You are member A; the other member is member B", forwarded replies are marked `from="member B"`, and the members are asked to refer to each other only by letter. A letter means the same member to whoever reads it, whereas "the other member" would point to someone else once a reply is passed on. The page, the transcript and `fugue status` show you who is who, for example "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)" when both members use the same tool. The exact wording sent to the members is in [src/fugue/prompts.py](src/fugue/prompts.py); edit it there to change how they talk to each other.
+**Hidden names, fixed letters.** The members are never told which agent or model the other is. Each gets a letter for the whole discussion, member A or member B, drawn at random when the discussion starts, so the first member you choose isn't always "A". Every message from step 2 on says "You are member A; the other member is member B", forwarded replies are marked `from="member B"`, and the members are asked to refer to each other only by letter. A letter means the same member to whoever reads it, whereas "the other member" would point to someone else once a reply is passed on. The page, the transcript and `fugue status` show you who is who, for example "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)" when both members use the same tool. The exact wording sent to the members is in [src/fugue/prompts.py](src/fugue/prompts.py); edit it there to change how they talk to each other.
 
 **Attached files.** A question (or a follow-up) can come with files: PDFs, Word files, images, text. They are kept in the discussion's own `attachments/` folder, and each member's first message for that question lists them after the question with their kind, size and path. PDF and Word files get a text version next to them (pypdf for PDFs), so every member can read them whatever its tool reads: Claude Code opens images and PDFs itself, Codex is handed the images with its message (`--image`), and the DeepSeek Harness reads text and, on image-capable models such as DeepSeek Flash, images. A question takes up to 50 MB of files. A question doesn't need a project folder: without one, the members work in the attachments folder, which suits reviewing a resume or a design document.
 
-**Where you come in.** fugue pauses and names the next step, for example "Next: each comments on the other's answer"; you move it on when you're ready. Two members pause after every round; a council pauses after its vote (to see the points, and start from another answer if you like) and after each revision. At any time you can:
+**Steps and rounds.** The page, the transcript and `fugue status` number each step from 1: step 1 is the independent answers, and every comment, update, vote, merge, review or revision after it is the next step. A round, as in the round limit, is a pair of steps after the answers: a comment step and an update step, or a review and a revision. Forwarded replies carry their step number (`step="2"`), so a member that cites a step means the same one you see.
+
+**Where you come in.** fugue pauses and names the next step, for example "Next: each comments on the other's answer"; you move it on when you're ready. Two members pause after every step; a council pauses after its vote (to see the points, and start from another answer if you like) and after each revision. At any time you can:
 
 - add a note to every member or just one; it goes into the next message fugue sends that member;
-- stop the agents mid-round;
+- stop the agents mid-step;
 - ask for one more round, also after they agreed or reached the limit;
 - ask a follow-up question, which starts again with independent answers;
-- change the round limit, or switch off "pause after each round" to let it run to the end by itself. Changing these never starts the members on its own; Continue does.
+- change the round limit, or switch off "pause after each step" to let it run to the end by itself. Changing these never starts the members on its own; Continue does.
 
 If an agent fails or is stopped, the discussion waits; continuing retries just that agent with the same message.
 
@@ -84,10 +86,10 @@ uv tool install --python 3.11 --editable .
 
 `fugue web` serves the page at <http://127.0.0.1:8765/> and opens it. On the left is every discussion, from every project, with a dot on the ones that are working or waiting for you. On the right is the selected discussion:
 
-- **At the top**, the question and one line saying where it stands ("Paused after round 1", "Agreed in round 3"). Attached files are listed under the question; click one to see it on the page (images and PDFs as they are, Word files as the text the members get) or to download it.
-- **The answers**: the round in progress, or once it has finished, each member's latest answer, side by side ("One at a time" shows one member at full width). While a member works you see its last step, then the reply as it is written. Earlier rounds are folded into one line; open it to see each round.
-- **You**: your notes and follow-up questions appear in the discussion as your own entries, saying when they go out ("note to both, goes out with round 2"; in a council, "goes out with member A's next message"), until they are sent.
-- **At the bottom**, one bar for whatever happens next: write your view for the next round (or pick "Follow-up question"), and press the button that names the next step, such as "Continue: each updates their answer". It takes your note along. While a round runs, the same bar has "Pause after this round" and "Stop".
+- **At the top**, the question and one line saying where it stands ("Paused after step 2", "Agreed in step 4"). Attached files are listed under the question; click one to see it on the page (images and PDFs as they are, Word files as the text the members get) or to download it.
+- **The answers**: the step in progress, or once it has finished, each member's latest answer, side by side ("One at a time" shows one member at full width). While a member works you see its last action, then the reply as it is written. Earlier steps are folded into one line; open it to see each step.
+- **You**: your notes and follow-up questions appear in the discussion as your own entries, saying when they go out ("note to both, goes out with step 3"; in a council, "goes out with member A's next message"), until they are sent.
+- **At the bottom**, one bar for whatever happens next: write your view for the next step (or pick "Follow-up question"), and press the button that names the next step, such as "Continue: each updates their answer". It takes your note along. While a step runs, the same bar has "Pause after this step" and "Stop".
 - **⋯** (top right) holds the folder, each member's model and effort, the round limit and pausing, the commands to resume each member's session, and Move to Trash.
 
 - Discussions started from the page run inside the `fugue web` process. Stopping it (Ctrl-C) stops their agents cleanly; continue them from the page later. Discussions started with `fugue start` in a terminal show up on the page live too.
@@ -120,15 +122,15 @@ fugue service uninstall    # stop it and remove it
 |---|---|
 | `fugue web` | Open the web page (`--port`, `--no-open`). |
 | `fugue service install` | Keep the web page running in the background on macOS; also `status`, `restart`, `uninstall`. |
-| `fugue start "question"` | Start a discussion; every member answers, then it goes on to the first pause. `--member` (two to four times) picks the members, `--attach FILE` (repeatable) attaches files, `--no-folder` asks without a project folder, `-n 3` sets the round limit, `--no-pause` runs every round without waiting for you, `--no-web` keeps every member off the web. |
-| `fugue continue` | Run the next round (it says which), or retry the agents that failed or were stopped. |
+| `fugue start "question"` | Start a discussion; every member answers, then it goes on to the first pause. `--member` (two to four times) picks the members, `--attach FILE` (repeatable) attaches files, `--no-folder` asks without a project folder, `-n 3` sets the round limit, `--no-pause` runs every step without waiting for you, `--no-web` keeps every member off the web. |
+| `fugue continue` | Run the next step (it says which), or retry the agents that failed or were stopped. |
 | `fugue next` | Run one more round, also after they agreed or reached the limit. |
 | `fugue ask "question"` | Ask a follow-up in the same discussion (`--attach FILE` to attach files). |
 | `fugue revote` | A council of three or four: every member answers again and the council votes again on where to start. |
-| `fugue note "text"` | Add your own view to the next round, for every member or one (`--to A`, `--to B`, ...). |
+| `fugue note "text"` | Add your own view to the next step, for every member or one (`--to A`, `--to B`, ...). |
 | `fugue pause` / `fugue stop` | Pause after the current round / stop the agents now. Works on a discussion running in another terminal or the page. |
-| `fugue status` | Who the members are, the rounds so far, objection counts, the next step, usage, and the commands to continue either member's session yourself. |
-| `fugue show [round]` | Print the replies from a round (default: the last; `--member A` for one member). `--prompt` shows exactly what fugue sent instead. |
+| `fugue status` | Who the members are, the steps so far, objection counts, the next step, usage, and the commands to continue either member's session yourself. |
+| `fugue show [step]` | Print the replies from a step, numbered from 1 (default: the last; `--member A` for one member). `--prompt` shows exactly what fugue sent instead. |
 | `fugue models` | The models and effort levels you can choose for each tool, and what each one uses when you choose nothing (`--refresh` asks Codex again). |
 | `fugue list` | All discussions, newest first (`--here` for this folder only). |
 | `fugue open` | Open the discussion's `transcript.md` in your default Markdown app. |
@@ -212,10 +214,10 @@ Discussions are kept outside your projects, in `~/.fugue/discussions/` (or `$FUG
   state.json                     rounds, sessions, the status of each reply
   events.jsonl                   everything that happened, in order; the page reads this live
   control.json                   round limit, pause and stop settings
-  inbox.json                     your notes and requests waiting for the next round
+  inbox.json                     your notes and requests waiting for the next step
   attachments/                   the files attached to its questions, with text versions of PDF and Word files
-  rounds/00-A.prompt.md          exactly what fugue sent to member A in round 0
-  rounds/00-A.md                 member A's reply in round 0
+  rounds/00-A.prompt.md          exactly what fugue sent to member A in step 1 (files count from 00)
+  rounds/00-A.md                 member A's reply in step 1
   logs/                          raw output of each agent call, for debugging
 ```
 

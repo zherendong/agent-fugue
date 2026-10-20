@@ -17,7 +17,8 @@ from pathlib import Path
 from . import __version__, engine, transcript
 from .agents import format_duration
 from .config import DEFAULT_TIMEOUT_MINUTES, new_discussion
-from .store import MAX_MEMBERS, TOOL_NAMES, TOOLS, Discussion, FugueError, list_discussions, select_discussion
+from .store import (MAX_MEMBERS, TOOL_NAMES, TOOLS, Discussion, FugueError, list_discussions, select_discussion,
+                    step_number)
 
 
 def err(message: str = "") -> None:
@@ -59,7 +60,7 @@ def print_entries(discussion: Discussion, rnd: dict, letters: list[str]) -> None
     for letter in letters:
         entry = rnd["entries"][letter]
         heading = transcript.entry_heading(rnd["kind"], discussion, letter)
-        print(f"\n━━━ Round {rnd['index']} · {heading} ━━━\n")
+        print(f"\n━━━ Step {step_number(rnd['index'])} · {heading} ━━━\n")
         if entry["status"] == "done":
             print(discussion.read_reply(rnd["index"], letter).rstrip())
         else:
@@ -275,7 +276,7 @@ def cmd_pause(args: argparse.Namespace) -> int:
     discussion = select_discussion(args.discussion)
     discussion.update_control(paused=True)
     if discussion.runner_pid():
-        err("It will pause when the current round finishes. `fugue stop` stops the agents now.")
+        err("It will pause when the current step finishes. `fugue stop` stops the agents now.")
     else:
         err("Paused. `fugue continue` goes on.")
     return 0
@@ -287,7 +288,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
         err("It isn't running.")
         return 0
     discussion.update_control(stop_requested=True)
-    err("Stopping the agents. `fugue continue` retries the round later.")
+    err("Stopping the agents. `fugue continue` retries the step later.")
     return 0
 
 
@@ -330,21 +331,25 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"Question:   {discussion.title}")
     print(f"Runs in:    {discussion.cwd}")
     print(f"Status:     {status['label']}")
-    pause = "pausing after each round" if control["pause_after_each_round"] else "without pausing"
-    print(f"Plan:       up to {control['max_rounds']} rounds of comments and updates after the answers, {pause}")
+    in_council = len(discussion.members) > 2
+    pause = ("pausing after the vote and each revision" if in_council else "pausing after each step") \
+        if control["pause_after_each_round"] else "without pausing"
+    rounds = "review and revision" if in_council else "comments and updates"
+    print(f"Plan:       up to {control['max_rounds']} rounds of {rounds} after the answers, {pause}")
     if status.get("next"):
         print(f"Next:       {status['next']}")
-    print(f"Web:        {'both members may use it' if state['settings'].get('web', True) else 'off for both members'}")
+    everyone = "every member" if in_council else "both members"
+    print(f"Web:        {f'{everyone} may use it' if state['settings'].get('web', True) else 'off'}")
     letters = list(discussion.members)
     for letter in letters:
         print(f"Member {letter}:   {TOOL_NAMES[discussion.members[letter]['tool']]}, "
               f"{describe_choice(discussion.members[letter])}")
     print(f"Transcript: {discussion.transcript_path}")
     print()
-    rows = [("Round", "What", *(f"Member {letter}" for letter in letters))]
+    rows = [("Step", "What", *(f"Member {letter}" for letter in letters))]
     for rnd in discussion.rounds:
-        what = transcript.round_heading(rnd, len(discussion.members) > 2).split(": ", 1)[1]
-        rows.append((str(rnd["index"]), what, *(_cell(rnd["entries"].get(letter)) for letter in letters)))
+        what = transcript.round_heading(rnd, in_council).split(": ", 1)[1]
+        rows.append((str(step_number(rnd["index"])), what, *(_cell(rnd["entries"].get(letter)) for letter in letters)))
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row[:-1], widths)) + "  " + row[-1])
@@ -352,7 +357,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     inbox = discussion.read_inbox()
     waiting = [discussion.name(letter) for letter in letters if inbox["notes"].get(letter)]
     if waiting:
-        print(f"\nNotes waiting for the next round, for: {', '.join(waiting)}")
+        print(f"\nNotes waiting for the next step, for: {', '.join(waiting)}")
     for request in inbox["requests"]:
         print(f"Queued: {request['type']}")
 
@@ -378,19 +383,19 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_show(args: argparse.Namespace) -> int:
     discussion = select_discussion(args.discussion)
     if not discussion.rounds:
-        raise FugueError("This discussion has no rounds yet.")
-    try:
-        rnd = discussion.rounds[args.round if args.round is not None else -1]
-    except IndexError:
-        raise FugueError(f"There is no round {args.round}; this discussion has "
-                        f"{len(discussion.rounds)} (0 to {len(discussion.rounds) - 1}).") from None
+        raise FugueError("This discussion has no steps yet.")
+    count = len(discussion.rounds)
+    if args.step is not None and not 1 <= args.step <= count:
+        raise FugueError(f"There is no step {args.step}; this discussion has {count} (1 to {count}).")
+    rnd = discussion.rounds[args.step - 1 if args.step is not None else -1]
     wanted = args.member.upper() if args.member else None
     if wanted and wanted not in discussion.members:
         raise FugueError(f"--member must be one of the letters {', '.join(discussion.members)}.")
     letters = [m for m in discussion.members if m in rnd["entries"] and wanted in (None, m)]
     if args.prompt:
         for letter in letters:
-            print(f"\n━━━ Round {rnd['index']} · exactly what fugue sent to {discussion.name(letter)} ━━━\n")
+            heading = f"Step {step_number(rnd['index'])} · exactly what fugue sent to {discussion.name(letter)}"
+            print(f"\n━━━ {heading} ━━━\n")
             print(discussion.prompt_path(rnd["index"], letter).read_text().rstrip())
         print()
     else:
@@ -526,14 +531,14 @@ def build_parser() -> argparse.ArgumentParser:
                        description="Ask both members a new question. Each answers on its own; then rounds of "
                                    "comments (each comments on the other's answer) and updates (each rewrites "
                                    "its answer in light of the comments) alternate, until neither has "
-                                   "objections or the round limit is reached. It pauses after every round "
+                                   "objections or the round limit is reached. It pauses after every step "
                                    "until you run `fugue continue`, unless you pass --no-pause.")
     p.add_argument("question", nargs="?",
                    help="the question; use - to read it from stdin, or leave it out to write it in $EDITOR")
     p.add_argument("-f", "--file", help="read the question from this file")
     p.add_argument("-n", "--rounds", type=int,
                    help="most rounds of comments and updates after the answers (default: 2 of each)")
-    p.add_argument("--no-pause", action="store_true", help="run all the rounds without waiting for you")
+    p.add_argument("--no-pause", action="store_true", help="run every step without waiting for you")
     p.add_argument("--no-web", action="store_true",
                    help="don't let either member use the web (on by default for both)")
     p.add_argument("--title", help="short name for the discussion (default: the question's first line)")
@@ -556,7 +561,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"give up on an agent after this long (default: {DEFAULT_TIMEOUT_MINUTES})")
     p.set_defaults(func=cmd_start)
 
-    p = sub.add_parser("continue", parents=[which, quiet], help="run the next round, or retry after a failure")
+    p = sub.add_parser("continue", parents=[which, quiet], help="run the next step, or retry after a failure")
     p.set_defaults(func=cmd_continue)
 
     p = sub.add_parser("next", parents=[which, quiet],
@@ -571,7 +576,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--attach", action="append", metavar="FILE", help="attach a file to the follow-up (repeat for more)")
     p.set_defaults(func=cmd_ask)
 
-    p = sub.add_parser("note", parents=[which], help="add your own view to the next round",
+    p = sub.add_parser("note", parents=[which], help="add your own view to the next step",
                        description="Save a note from you. fugue adds it to the next message it sends.")
     p.add_argument("text", nargs="?", help="the note; use - for stdin, or leave it out to use $EDITOR")
     p.add_argument("-f", "--file", help="read the note from this file")
@@ -585,17 +590,17 @@ def build_parser() -> argparse.ArgumentParser:
                                    "far, and the council votes again on where to start.")
     p.set_defaults(func=cmd_revote)
 
-    p = sub.add_parser("pause", parents=[which], help="pause when the current round finishes")
+    p = sub.add_parser("pause", parents=[which], help="pause when the current step finishes")
     p.set_defaults(func=cmd_pause)
 
-    p = sub.add_parser("stop", parents=[which], help="stop the members now, mid-round")
+    p = sub.add_parser("stop", parents=[which], help="stop the members now, mid-step")
     p.set_defaults(func=cmd_stop)
 
-    p = sub.add_parser("status", parents=[which], help="show the rounds so far and how to resume each member")
+    p = sub.add_parser("status", parents=[which], help="show the steps so far and how to resume each member")
     p.set_defaults(func=cmd_status)
 
-    p = sub.add_parser("show", parents=[which], help="print the replies from one round")
-    p.add_argument("round", nargs="?", type=int, help="round number (default: the last one)")
+    p = sub.add_parser("show", parents=[which], help="print the replies from one step")
+    p.add_argument("step", nargs="?", type=int, help="step number, from 1 (default: the last one)")
     p.add_argument("--member", metavar="A|B", help="only this member's reply")
     p.add_argument("--prompt", action="store_true", help="show exactly what fugue sent instead of the reply")
     p.set_defaults(func=cmd_show)

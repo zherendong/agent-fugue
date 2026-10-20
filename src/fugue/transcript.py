@@ -7,7 +7,7 @@ import shlex
 from pathlib import Path
 
 from .agents import format_duration
-from .store import Discussion
+from .store import Discussion, step_number
 
 ROUND_LABELS = {
     "answer": "independent answers",
@@ -78,13 +78,15 @@ def resume_command(discussion: Discussion, letter: str, session_id: str) -> str:
 
 
 def round_heading(rnd: dict, in_council: bool = False) -> str:
+    """A round's heading, as a step: "Step 2: each comments on the other's answer"."""
+    number = step_number(rnd["index"])
     if rnd["kind"] == "answer" and rnd.get("reopen"):
-        return f"Round {rnd['index']}: everyone answers again, for a new vote"
+        return f"Step {number}: everyone answers again, for a new vote"
     if rnd["kind"] == "answer" and rnd["index"] > 0:
-        return f"Round {rnd['index']}: follow-up question, independent answers"
+        return f"Step {number}: follow-up question, independent answers"
     if rnd["kind"] == "review" and in_council:
-        return f"Round {rnd['index']}: {COUNCIL_REVIEW_LABEL}"
-    return f"Round {rnd['index']}: {ROUND_LABELS[rnd['kind']]}"
+        return f"Step {number}: {COUNCIL_REVIEW_LABEL}"
+    return f"Step {number}: {ROUND_LABELS[rnd['kind']]}"
 
 
 def vote_summary(rnd: dict) -> str:
@@ -158,7 +160,7 @@ def render(discussion: Discussion) -> str:
 
     pending = discussion.read_inbox()["notes"]
     if any(pending.values()):
-        lines += ["---", "", "## Notes waiting for the next round", ""]
+        lines += ["---", "", "## Notes waiting for the next step", ""]
         shown_shared = set()
         for letter in discussion.members:
             for note in pending.get(letter, []):

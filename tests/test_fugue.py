@@ -140,11 +140,11 @@ def test_it_stops_once_neither_member_has_objections(env, monkeypatch):
     assert fugue("start", "Q?", "--no-pause", "-q") == 0
     discussion = latest()
     assert kinds(discussion) == ["answer", "comment"]
-    assert engine.describe(discussion)["label"] == "Agreed in round 1"
+    assert engine.describe(discussion)["label"] == "Agreed in step 2"
     # One more round can still be asked for; without pausing, its update is then commented on again.
     assert fugue("next", "-q") == 0
     assert kinds(latest()) == ["answer", "comment", "update", "comment"]
-    assert engine.describe(latest())["label"] == "Agreed in round 3"
+    assert engine.describe(latest())["label"] == "Agreed in step 4"
 
 
 def test_read_only_flags_and_sessions(env):
@@ -206,13 +206,13 @@ def test_each_round_forwards_the_right_message(env):
     assert "Claude reply number 1." in to_codex and "Codex reply number" not in to_codex
     discussion = latest()
     me, other = letter_of(discussion, "claude"), letter_of(discussion, "codex")
-    assert f'<answer from="member {other}" round="0">' in to_claude
+    assert f'<answer from="member {other}" step="1">' in to_claude
     assert f"You are member {me} of a council of two; the other member is member {other}." in to_claude
     assert "Objections: <number>" in to_claude and "turned down" not in to_claude
     # Round 2: each gets the comments on its own answer and rewrites it in full.
     update = to("claude", made[4:6])["prompt"]
     assert "Codex reply number 2." in update and "Codex reply number 1." not in update
-    assert f'<comments from="member {other}" round="1">' in update
+    assert f'<comments from="member {other}" step="2">' in update
     assert f"Here are member {other}'s comments on your answer" in update
     assert "full updated answer" in update and "Objections: <number>" not in update
     # Round 3: each comments on the other's updated answer, which may turn down earlier comments.
@@ -227,7 +227,7 @@ def test_update_prompt_asks_for_the_answer_before_the_responses():
     from fugue.prompts import build_prompt
 
     prompt = build_prompt("update", me="A", other="B", messages=[(1, "comment", "Comments from B.")])
-    comments = prompt.index('<comments from="member B" round="1">')
+    comments = prompt.index('<comments from="member B" step="2">')
     answer = prompt.index("1. Your full updated answer")
     responses = prompt.index("2. After the answer, under a heading of its own, your response to member B's objections")
     assert comments < answer < responses
@@ -281,7 +281,7 @@ def test_failed_agent_stops_the_discussion_and_is_retried_alone(env, monkeypatch
     assert discussion.rounds[0]["entries"][codex_letter]["status"] == "failed"
     status = engine.describe(discussion)
     assert status["phase"] == "stopped" and "simulated Codex failure" in status["detail"]
-    assert status["next"].startswith("retry round 0")
+    assert status["next"].startswith("retry step 1")
     assert codex_letter not in discussion.state["sessions"]
 
     monkeypatch.delenv("FAKE_CODEX_FAIL")
@@ -388,14 +388,16 @@ def test_status_show_and_list(env, capsys):
     assert fugue("status") == 0
     out = capsys.readouterr().out
     assert "claude --resume" in out and "codex resume" in out
-    assert "1 objection" in out and "Paused after round 1" in out
+    assert "1 objection" in out and "Paused after step 2" in out
     assert "Next:       each updates their answer" in out
     assert "Member A:   " in out and "Member B:   " in out
-    assert fugue("show", "0", "--member", letter_of(latest(), "codex")) == 0
+    assert fugue("show", "1", "--member", letter_of(latest(), "codex")) == 0
     out = capsys.readouterr().out
-    assert "Codex reply number 1." in out and "Claude reply" not in out
-    assert fugue("show", "1", "--prompt") == 0
-    assert "exactly what fugue sent" in capsys.readouterr().out
+    assert "Step 1 · " in out and "Codex reply number 1." in out and "Claude reply" not in out
+    assert fugue("show", "2", "--prompt") == 0
+    assert "Step 2 · exactly what fugue sent" in capsys.readouterr().out
+    assert fugue("show", "3") == 1  # there are two steps, numbered from 1
+    assert "There is no step 3" in capsys.readouterr().err
     assert fugue("list") == 0
     assert latest().id in capsys.readouterr().out
 
@@ -705,7 +707,7 @@ def test_a_council_votes_merges_reviews_and_revises(env, monkeypatch):
         assert sorted(entry["candidates"]) == sorted(set("ABC") - {voter})
         prompt = discussion.prompt_path(vote["index"], voter).read_text()
         assert f'<answer from="member {voter}"' not in prompt
-        assert all(f'<answer from="member {other}" round="0">' in prompt for other in entry["candidates"])
+        assert all(f'<answer from="member {other}" step="1">' in prompt for other in entry["candidates"])
         assert "Ranking: <their letters" in prompt
     # B is ranked first by A and C, so B's answer is the starting point.
     assert vote["vote"]["points"] == {"A": 0, "B": 2, "C": 1}
@@ -713,16 +715,16 @@ def test_a_council_votes_merges_reviews_and_revises(env, monkeypatch):
     # B merges, reading the other ballots; A and C review; B revises from their reviews.
     assert round_letters(merge) == ["B"] and round_letters(review) == ["A", "C"] and round_letters(revise) == ["B"]
     merge_prompt = discussion.prompt_path(merge["index"], "B").read_text()
-    assert '<ballot from="member A" round="1">' in merge_prompt and '<ballot from="member C" round="1">' in merge_prompt
+    assert '<ballot from="member A" step="2">' in merge_prompt and '<ballot from="member C" step="2">' in merge_prompt
     assert "points from other members' answers that you did not take" in merge_prompt
     review_prompt = discussion.prompt_path(review["index"], "A").read_text()
-    assert '<answer from="member B" round="2">' in review_prompt and "Starting point: <keep or change>" in review_prompt
+    assert '<answer from="member B" step="3">' in review_prompt and "Starting point: <keep or change>" in review_prompt
     assert "You are member A of a council of 3: members A, B and C." in review_prompt
     assert review["entries"]["A"]["objections"] == 1 and review["entries"]["A"]["starting_point"] == "keep"
     revise_prompt = discussion.prompt_path(revise["index"], "B").read_text()
-    assert '<comments from="member A" round="3">' in revise_prompt and '<comments from="member C" round="3">' in revise_prompt
+    assert '<comments from="member A" step="4">' in revise_prompt and '<comments from="member C" step="4">' in revise_prompt
     later_review = discussion.prompt_path(last["index"], "C").read_text()
-    assert '<answer from="member B" round="4">' in later_review and "turned down one of your earlier objections" in later_review
+    assert '<answer from="member B" step="5">' in later_review and "turned down one of your earlier objections" in later_review
     # The members only ever see letters.
     for call in calls(env):
         own_words = without_forwarded(call["prompt"])
@@ -732,9 +734,9 @@ def test_a_council_votes_merges_reviews_and_revises(env, monkeypatch):
     b_sessions = {c["session"] for c in calls(env) if c["agent"] == b_tool}
     assert len(b_sessions) == 1
     status = engine.describe(discussion)
-    assert status["label"] == "Finished at the round limit" and "Objections still open after round 5" in status["detail"]
+    assert status["label"] == "Finished at the round limit" and "Objections still open after step 6" in status["detail"]
     text = discussion.transcript_path.read_text()
-    assert "Round 1: each votes for the best answer to start from" in text
+    assert "Step 2: each votes for the best answer to start from" in text
     assert "Starting point: member B's answer, by vote (3 of 3 ballots counted)." in text
 
 
@@ -764,7 +766,7 @@ def test_a_council_stops_when_no_reviewer_objects(env, monkeypatch):
     assert fugue("start", "Q?", "--no-pause", "-q", *COUNCIL) == 0
     discussion = latest()
     assert kinds(discussion) == ["answer", "vote", "merge", "review"]
-    assert engine.describe(discussion)["label"] == "Agreed in round 3"
+    assert engine.describe(discussion)["label"] == "Agreed in step 4"
 
 
 def test_a_council_votes_again_once_when_reviewers_want_another_start(env, monkeypatch):
@@ -779,7 +781,7 @@ def test_a_council_votes_again_once_when_reviewers_want_another_start(env, monke
     assert "the council will vote again" in prompt and "Write your own best answer" in prompt
     # The second vote is on the new answers.
     vote = discussion.rounds[5]
-    assert all(f'round="4"' in discussion.prompt_path(5, voter).read_text() for voter in vote["entries"])
+    assert all(f'step="5"' in discussion.prompt_path(5, voter).read_text() for voter in vote["entries"])
 
 
 def test_a_council_with_unreadable_ballots_draws_the_starting_point(env, monkeypatch):

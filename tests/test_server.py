@@ -97,7 +97,7 @@ def test_create_and_run_a_discussion(server, monkeypatch):
     ident = created["id"]
     data = wait_for_phase(server, ident, {"finished"})
     assert [r["kind"] for r in data["rounds"]] == ["answer", "comment"]
-    assert data["status"]["label"] == "Agreed in round 1"
+    assert data["status"]["label"] == "Agreed in step 2"
     claude, codex = letter_of(data, "claude"), letter_of(data, "codex")
     assert data["members"][claude]["name"] == f"Claude (member {claude})"
     assert data["members"][claude]["short_name"] == "Claude"

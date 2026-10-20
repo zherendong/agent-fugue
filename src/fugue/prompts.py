@@ -97,10 +97,13 @@ NOTE_TAIL = "Take it into account in this reply."
 
 
 def format_message(sender_label: str, round_index: int, kind: str, text: str) -> str:
-    """Wrap one forwarded reply so the receiver can tell whose it is, what it is and where it ends."""
+    """Wrap one forwarded reply so the receiver can tell whose it is, what it is and where it ends.
+
+    It carries the step number the user sees (from 1), so a member citing a step means the same one.
+    """
     tag = ("answer" if kind in ANSWER_KINDS else "comments" if kind in COMMENT_KINDS
            else "ballot" if kind in BALLOT_KINDS else "message")
-    return f'<{tag} from="member {sender_label}" round="{round_index}">\n{text.strip()}\n</{tag}>'
+    return f'<{tag} from="member {sender_label}" step="{round_index + 1}">\n{text.strip()}\n</{tag}>'
 
 
 def build_prompt(

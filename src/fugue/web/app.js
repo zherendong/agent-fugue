@@ -21,7 +21,7 @@ const S = {
   frame: 0,
   refreshTimer: 0,
   follow: false,        // keep the view scrolled to the bottom while it runs
-  activityOpen: new Set(), // "discussion:round:letter" of replies whose steps are shown
+  activityOpen: new Set(), // "discussion:round:letter" of replies whose actions are shown
   historyOpen: new Set(),  // discussions whose earlier rounds are unfolded
   roundOpen: new Set(),    // "discussion:round" of earlier rounds that are unfolded
   questionOpen: new Set(), // discussions whose long question is shown in full
@@ -107,6 +107,12 @@ async function attempt(action) {
     toast(error.message, 'error');
     return undefined;
   }
+}
+
+// fugue keeps rounds in order from 0; the page shows each as a step, from 1. A "round" in the
+// round limit is a pair of steps: comments and updates, or a review and a revision.
+function stepOf(index) {
+  return Number(index) + 1;
 }
 
 function plural(n, word) {
@@ -855,7 +861,7 @@ function statusText(d) {
       : working.length === 0 ? 'Starting'
         : working.length === letters(d).length ? (working.length === 2 ? 'Both members are working' : `All ${working.length} members are working`)
           : `Members ${working.join(' and ')} are working`;
-    if (d.control.paused) text += ' · will pause after this round';
+    if (d.control.paused) text += ' · will pause after this step';
     return text;
   }
   if (s.phase === 'finished' && !s.label.startsWith('Agreed')) {
@@ -1068,6 +1074,10 @@ function roundsLabel(members) {
   return members > 2 ? 'Rounds of review and revision' : 'Rounds of comments and updates';
 }
 
+function pauseLabel(members) {
+  return members > 2 ? 'Pause after the vote and each revision' : 'Pause after each step';
+}
+
 function roundsHint(members) {
   return members > 2
     ? 'After the answers and the vote, each round has two steps: the others review the shared answer, then its author '
@@ -1086,7 +1096,7 @@ function planControls(d) {
         counts.map((n) => el('option', { value: n, selected: n === c.max_rounds }, n)))),
     el('label', {},
       el('input', { type: 'checkbox', checked: c.pause_after_each_round, onchange: (e) => control({ pause_after_each_round: e.target.checked }) }),
-      'Pause after each round'));
+      pauseLabel(letters(d).length)));
 }
 
 const ROUND_TITLES = {
@@ -1179,7 +1189,7 @@ function followupBlock(r) {
 // The round in progress, or just done, of a discussion that hasn't finished.
 function currentRoundSection(d, r) {
   return el('section', { class: 'answers', id: `round-${r.index}` },
-    sectionHead(`Round ${r.index}: ${roundTitle(r)}`, Object.keys(r.entries).length, tally(r)),
+    sectionHead(`Step ${stepOf(r.index)}: ${roundTitle(r)}`, Object.keys(r.entries).length, tally(r)),
     r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r) : null,
     sentNotes(d, r),
     r.kind === 'vote' ? voteBoard(d, r) : null,
@@ -1266,7 +1276,7 @@ function resultSection(d) {
 function resultColumn(d, letter, r) {
   const e = r.entries[letter];
   return el('article', { class: `reply-col ${memberClass(d, letter)} status-done` },
-    columnHead(d, letter, `from round ${r.index}`, ''),
+    columnHead(d, letter, `from step ${stepOf(r.index)}`, ''),
     el('div', { class: 'reply md', html: md(e.reply) }),
     el('footer', {},
       el('button', { class: 'link', type: 'button', onclick: () => showContext(r.index, letter) }, 'Inspect context'),
@@ -1294,8 +1304,8 @@ function historySection(d, current) {
       },
     },
     el('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
-    hasResult(d) ? 'How they got here' : 'Earlier rounds',
-    el('span', { class: 'muted' }, ` · ${plural(rounds.length, 'round')}`)),
+    hasResult(d) ? 'How they got here' : 'Earlier steps',
+    el('span', { class: 'muted' }, ` · ${plural(rounds.length, 'step')}`)),
     open ? el('ol', { class: 'rounds' }, rounds.map((r) => historyRound(d, r))) : null);
 }
 
@@ -1315,7 +1325,7 @@ function historyRound(d, r) {
         drawDiscussion();
       },
     },
-    el('span', { class: 'num' }, r.index),
+    el('span', { class: 'num' }, stepOf(r.index)),
     el('span', { class: 'title' }, roundTitle(r)),
     tally(r),
     r.kind === 'vote' && r.vote ? el('span', { class: 'tally ok' }, `starting point: ${shortWho(d, r.vote.chosen)}`) : null,
@@ -1396,7 +1406,7 @@ function card(r, letter) {
   el('ol', { class: 'steps', hidden: !S.activityOpen.has(key) }));
 }
 
-// A reply's steps (files read, commands run) are hidden until asked for.
+// A reply's actions (files read, commands run) are hidden until asked for.
 function stepsKey(round, letter) {
   return `${S.id}:${round}:${letter}`;
 }
@@ -1433,7 +1443,7 @@ function patchCard(round, letter) {
   if (atBottom) ol.scrollTop = ol.scrollHeight;
   const toggle = node.querySelector('.steps-toggle');
   toggle.hidden = !items.length;
-  toggle.textContent = ol.hidden ? `Show ${plural(items.length, 'step')}` : 'Hide steps';
+  toggle.textContent = ol.hidden ? `Show ${plural(items.length, 'action')}` : 'Hide actions';
   const liveNode = node.querySelector('.live');
   if (liveNode) {
     if (live && live.text) liveNode.innerHTML = md(live.text);
@@ -1491,13 +1501,13 @@ function drawContext() {
   const dialog = $('#context-dialog');
   dialog.replaceChildren(
     el('div', { class: 'dialog-head' },
-      el('h2', {}, `What ${memberTitle(d, letter)} (member ${letter}) saw in round ${round}`),
+      el('h2', {}, `What ${memberTitle(d, letter)} (member ${letter}) saw in step ${stepOf(round)}`),
       el('button', { type: 'button', class: 'btn small', onclick: () => copy(shown.map((i) => i.text).join('\n\n')) }, 'Copy'),
       el('button', { type: 'button', class: 'btn ghost small', onclick: () => dialog.close() }, 'Close')),
     el('div', { class: 'context-bar' },
       el('div', { class: 'tabs', role: 'tablist' },
-        tabButton('round', "This round's message"),
-        tabButton('all', `Whole conversation up to round ${round}`)),
+        tabButton('round', "This step's message"),
+        tabButton('all', `Whole conversation up to step ${stepOf(round)}`)),
       el('div', { class: 'legend' },
         legend('src-you', 'You'),
         legend('src-fugue', "fugue's instructions"),
@@ -1506,26 +1516,27 @@ function drawContext() {
     el('div', { class: 'context-body' }, shown.map((item) => contextItem(d, letter, item))),
     el('div', { class: 'context-foot' },
       "What fugue sent this member and what it replied, in order. Not included: its tool's own system prompt, "
-      + 'CLAUDE.md or AGENTS.md, and the files it read (see its steps).'));
+      + 'CLAUDE.md or AGENTS.md, and the files it read (see its actions).'));
 }
 
 function contextItem(d, letter, item) {
   if (item.role === 'reply') {
-    return contextBlock(`src-m ${memberClass(d, letter)}`, `Round ${item.round} · ${d.members[letter].name} replied`, item.text);
+    return contextBlock(`src-m ${memberClass(d, letter)}`, `Step ${stepOf(item.round)} · ${d.members[letter].name} replied`, item.text);
   }
   if (item.kind === 'answer' && item.round === 0) {
     // The first message is your question as you wrote it, followed by the list of attached files if any.
     const files = d.attachments && d.attachments.length ? ', then the list of attached files' : '';
-    return contextBlock('src-you', `Round ${item.round} · your question as you wrote it${files}`, item.text);
+    return contextBlock('src-you', `Step ${stepOf(item.round)} · your question as you wrote it${files}`, item.text);
   }
   return el('div', { class: 'ctx-msg' },
-    el('div', { class: 'ctx-label' }, `Round ${item.round} · message from fugue`),
+    el('div', { class: 'ctx-label' }, `Step ${stepOf(item.round)} · message from fugue`),
     contextSegments(d, item.text, letter));
 }
 
 // fugue wraps what it forwards in tags, so a message splits into its sources.
-// Discussions from before letters wrote from="the other member".
-const FORWARDED = /<([a-z]+) from="([^"]*)" round="(\d+)">\n?([\s\S]*?)\n?<\/\1>|<question>\n?([\s\S]*?)\n?<\/question>|<user_note>\n?([\s\S]*?)\n?<\/user_note>/g;
+// Discussions from before letters wrote from="the other member", and from before
+// steps wrote round="N" counted from 0.
+const FORWARDED = /<([a-z]+) from="([^"]*)" (round|step)="(\d+)">\n?([\s\S]*?)\n?<\/\1>|<question>\n?([\s\S]*?)\n?<\/question>|<user_note>\n?([\s\S]*?)\n?<\/user_note>/g;
 
 function contextSegments(d, text, letter) {
   const out = [];
@@ -1536,11 +1547,12 @@ function contextSegments(d, text, letter) {
     if (m[1]) {
       const named = m[2].match(/member ([A-Z])/);
       const sender = named && d.members[named[1]] ? named[1] : otherLetter(d, letter);
-      out.push(contextBlock(`src-m ${memberClass(d, sender)}`, `${d.members[sender].name}'s ${m[1]}, round ${m[3]}`, m[4]));
-    } else if (m[5] !== undefined) {
-      out.push(contextBlock('src-you', 'Your follow-up question', m[5]));
+      const number = m[3] === 'round' ? stepOf(m[4]) : Number(m[4]);
+      out.push(contextBlock(`src-m ${memberClass(d, sender)}`, `${d.members[sender].name}'s ${m[1]}, step ${number}`, m[5]));
+    } else if (m[6] !== undefined) {
+      out.push(contextBlock('src-you', 'Your follow-up question', m[6]));
     } else {
-      out.push(contextBlock('src-you', 'Your note', m[6]));
+      out.push(contextBlock('src-you', 'Your note', m[7]));
     }
     last = m.index + m[0].length;
   }
@@ -1611,13 +1623,13 @@ function setMode(mode) {
   let hint;
   if (mode === 'ask') {
     placeholder = 'Ask a follow-up question';
-    hint = phase === 'running' ? "It's asked once this round is done; each member answers on its own first."
+    hint = phase === 'running' ? "It's asked once this step is done; each member answers on its own first."
       : 'Each member answers it on its own first.';
   } else {
     const who = mode === 'both' ? everyone(d) : m.name;
     placeholder = phase === 'finished' ? `Add a note to ${who} for one more round`
-      : phase === 'running' ? `Add a note to ${who} for the next round`
-        : `Add your view for the next round, to ${who} (optional)`;
+      : phase === 'running' ? `Add a note to ${who} for the next step`
+        : `Add your view for the next step, to ${who} (optional)`;
     hint = `It goes into the next message fugue sends to ${who}.`;
     const n = S.picker.files.length;
     if (n) hint += ` ${n === 1 ? 'Your file waits' : `Your ${n} files wait`} for a follow-up question; notes don't carry files.`;
@@ -1680,7 +1692,7 @@ function barActions(d) {
   let primary;
   switch (d.status.phase) {
     case 'running':
-      items.push(button(d.control.paused ? "Don't pause" : 'Pause after this round', () => control({ paused: !d.control.paused }), 'ghost'));
+      items.push(button(d.control.paused ? "Don't pause" : 'Pause after this step', () => control({ paused: !d.control.paused }), 'ghost'));
       items.push(button('Stop', () => attempt(async () => { await api('POST', path('stop')); refreshSoon(); }), 'ghost danger',
         'Stop the members now. You can continue the discussion later.'));
       primary = button(ask ? 'Queue the question' : 'Save note', async () => {
@@ -1754,23 +1766,23 @@ function sentNotes(d, r) {
     for (const note of (r.entries[letter] && r.entries[letter].notes) || []) {
       if (note.shared && seen.has(note.text)) continue;
       if (note.shared) seen.add(note.text);
-      out.push(youEntry(`${note.shared ? `note to ${everyone(d)}` : `note to member ${letter}`}, sent with this round`, note.text));
+      out.push(youEntry(`${note.shared ? `note to ${everyone(d)}` : `note to member ${letter}`}, sent with this step`, note.text));
     }
   }
   return out;
 }
 
-function nextRoundText(d) {
+function nextStepText(d) {
   const last = d.rounds[d.rounds.length - 1];
-  if (!last || d.status.phase === 'stopped') return 'the next round';
-  return `round ${d.status.phase === 'running' ? last.index + 1 : d.rounds.length}`;
+  if (!last || d.status.phase === 'stopped') return 'the next step';
+  return `step ${stepOf(d.status.phase === 'running' ? last.index + 1 : d.rounds.length)}`;
 }
 
 function pendingSection(d) {
   const items = [];
   const seen = new Set();
   // In a council not every member takes part in every round, so a note waits for its member's next message.
-  const when = (letter, shared) => (!d.council ? nextRoundText(d)
+  const when = (letter, shared) => (!d.council ? nextStepText(d)
     : shared ? "each member's next message" : `member ${letter}'s next message`);
   for (const letter of letters(d)) {
     (d.inbox.notes[letter] || []).forEach((note, index) => {
@@ -1784,7 +1796,7 @@ function pendingSection(d) {
   for (const r of d.inbox.requests) {
     const remove = () => api('DELETE', path('requests', r.id));
     if (r.type === 'ask') {
-      const entry = youEntry('follow-up question, asked once the current round is done', r.question,
+      const entry = youEntry('follow-up question, asked once the current step is done', r.question,
         editLink(remove, r.question, 'ask', r.attachments), removeLink(remove));
       const files = attachmentList(d, r.attachments);
       if (files) entry.append(files);
@@ -2059,6 +2071,7 @@ async function showNewQuestion() {
   const pauseBox = el('input', { type: 'checkbox', name: 'pause', checked: pause });
   const webBox = el('input', { type: 'checkbox', name: 'web', checked: web });
   const roundsText = el('span');
+  const pauseText = el('span');
   const roundsHintNode = el('div', { class: 'hint' });
   const summary = el('span');
   // The folded line and the rounds wording follow what the form says now.
@@ -2066,6 +2079,7 @@ async function showNewQuestion() {
     const names = lineup.map((m) => (m.model ? `${TOOL_LABELS[m.tool]} (${modelName(m.tool, m.model)})` : TOOL_LABELS[m.tool]));
     const n = Number(roundsSelect.value);
     roundsText.textContent = roundsLabel(lineup.length);
+    pauseText.textContent = pauseLabel(lineup.length);
     roundsHintNode.textContent = roundsHint(lineup.length);
     summary.textContent = `${joinAnd(names)} · ${plural(n, 'round')} of ${lineup.length > 2 ? 'review and revision' : 'comments and updates'}`
       + ` · ${pauseBox.checked ? 'pauses along the way' : 'runs to the end'} · ${webBox.checked ? 'web on' : 'no web'}`;
@@ -2077,7 +2091,7 @@ async function showNewQuestion() {
       el('div', { class: 'label' }, 'How it runs'),
       el('div', { class: 'options' },
         el('label', {}, roundsText, roundsSelect),
-        el('label', {}, pauseBox, 'Pause after each round'),
+        el('label', {}, pauseBox, pauseText),
         el('label', { title: "All or none. Claude: web search and fetching pages (not from this Mac's own servers). Codex and DeepSeek: their web search." },
           webBox, 'Members may use the web'),
         el('label', {}, 'Give up on a member after',
@@ -2197,7 +2211,11 @@ async function showSettings() {
   }
   const d = settings.defaults;
   const roundsText = el('span', {}, roundsLabel(d.members.length));
-  const members = membersField(d.members, (picked) => { roundsText.textContent = roundsLabel(picked.length); });
+  const pauseText = el('span', {}, pauseLabel(d.members.length));
+  const members = membersField(d.members, (picked) => {
+    roundsText.textContent = roundsLabel(picked.length);
+    pauseText.textContent = pauseLabel(picked.length);
+  });
   const statusBox = el('div', { class: 'status-box' });
   const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, d.max_rounds])].sort((a, b) => a - b);
   const form = el('form', { class: 'form settings', onsubmit: (e) => { e.preventDefault(); saveSettings(form); } },
@@ -2210,7 +2228,7 @@ async function showSettings() {
       el('div', { class: 'options' },
         el('label', {}, roundsText,
           el('select', { name: 'max_rounds' }, counts.map((n) => el('option', { value: n, selected: n === d.max_rounds }, n)))),
-        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: d.pause_after_each_round }), 'Pause after each round'),
+        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: d.pause_after_each_round }), pauseText),
         el('label', {}, el('input', { type: 'checkbox', name: 'web', checked: d.web }), 'Members may use the web'),
         el('label', {}, 'Give up on a member after',
           el('input', { type: 'text', name: 'timeout', value: d.timeout_minutes, class: 'short' }), 'minutes'))),

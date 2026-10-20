@@ -95,6 +95,13 @@ def upgrade_state(state: dict) -> dict:
     return new
 
 
+def step_number(index: int) -> int:
+    """The number people see for a stored round. fugue keeps rounds in order from 0 and shows each as a
+    step, from 1; "round" in the round limit means a pair of steps (comments and updates, or a review
+    and a revision)."""
+    return index + 1
+
+
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
