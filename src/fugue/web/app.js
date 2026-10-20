@@ -617,8 +617,10 @@ function statusText(d) {
     // The round itself is named just below, so this says who is at work.
     const last = d.rounds[d.rounds.length - 1];
     const working = last ? letters(d).filter((letter) => last.entries[letter] && last.entries[letter].status === 'running') : [];
-    let text = working.length === 2 ? 'Both members are working'
-      : working.length === 1 ? `${memberTitle(d, working[0])} (member ${working[0]}) is working` : 'Starting';
+    let text = working.length === 1 ? `${memberTitle(d, working[0])} (member ${working[0]}) is working`
+      : working.length === 0 ? 'Starting'
+        : working.length === letters(d).length ? (working.length === 2 ? 'Both members are working' : `All ${working.length} members are working`)
+          : `Members ${working.join(' and ')} are working`;
     if (d.control.paused) text += ' · will pause after this round';
     return text;
   }
@@ -629,9 +631,9 @@ function statusText(d) {
   return s.label;
 }
 
-// Objections left in the last comment round of the latest question.
+// Objections left in the last comment round (a council's last review) of the latest question.
 function openObjections(d) {
-  const comments = currentRounds(d).filter((r) => r.kind === 'comment');
+  const comments = currentRounds(d).filter((r) => r.kind === 'comment' || (d.council && r.kind === 'review'));
   const last = comments[comments.length - 1];
   if (!last) return 0;
   return Object.values(last.entries).reduce((sum, e) => sum + (e.objections || 0), 0);
@@ -790,8 +792,9 @@ function planControls(d) {
   const c = d.control;
   const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, c.max_rounds])].sort((a, b) => a - b);
   return el('div', { class: 'plan' },
-    el('label', { title: "Each round: both comment on the other's answer, then both update their own. It stops earlier once neither has objections." },
-      'Rounds of comments and updates',
+    el('label', { title: d.council ? 'Each round: the others review the shared answer, then its author revises it. It stops earlier once no reviewer objects.'
+      : "Each round: both comment on the other's answer, then both update their own. It stops earlier once neither has objections." },
+      d.council ? 'Rounds of review and revision' : 'Rounds of comments and updates',
       el('select', { onchange: (e) => control({ max_rounds: Number(e.target.value) }) },
         counts.map((n) => el('option', { value: n, selected: n === c.max_rounds }, n)))),
     el('label', {},
@@ -811,8 +814,31 @@ const ROUND_TITLES = {
 
 const ANSWER_KINDS = new Set(['answer', 'update', 'final']);
 
+// The member a council's vote chose to write the shared answer, as of round `index`.
+function chosenBefore(d, index) {
+  let chosen = null;
+  for (const r of d.rounds) {
+    if (r.index >= index) break;
+    if (r.kind === 'answer' && !r.reopen) chosen = null;
+    if (r.kind === 'vote' && r.vote) chosen = r.vote.chosen;
+  }
+  return chosen;
+}
+
 function roundTitle(r) {
-  return r.kind === 'answer' && r.index > 0 ? 'Follow-up question, independent answers' : ROUND_TITLES[r.kind];
+  const d = S.detail;
+  if (r.kind === 'answer' && r.reopen) return 'Everyone answers again, for a new vote';
+  if (r.kind === 'answer' && r.index > 0) return 'Follow-up question, independent answers';
+  if (d && d.council && r.kind !== 'answer') {
+    const writer = r.kind === 'review' ? chosenBefore(d, r.index) : Object.keys(r.entries)[0];
+    return {
+      vote: 'Each votes for the best answer to start from',
+      merge: `Member ${writer} merges the others' points into its answer`,
+      review: `The others review member ${writer}'s answer`,
+      revise: `Member ${writer} revises the answer`,
+    }[r.kind];
+  }
+  return ROUND_TITLES[r.kind];
 }
 
 // ---------------------------------------------------------------- answers side by side
@@ -837,7 +863,7 @@ function sectionHead(title, ...extra) {
 
 function pairOf(d, shown, make) {
   if (S.layout !== 'single' || shown.length < 2) {
-    return el('div', { class: `pair${shown.length === 1 ? ' one' : ''}` }, shown.map(make));
+    return el('div', { class: `pair${shown.length === 1 ? ' one' : ''} n${shown.length}` }, shown.map(make));
   }
   const tab = shown.includes(S.tab) ? S.tab : shown[0];
   return el('div', { class: 'pair one tabbed' },
@@ -863,9 +889,45 @@ function followupBlock(question) {
 function currentRoundSection(d, r) {
   return el('section', { class: 'answers', id: `round-${r.index}` },
     sectionHead(`Round ${r.index}: ${roundTitle(r)}`, tally(r)),
-    r.kind === 'answer' && r.index > 0 ? followupBlock(r.question) : null,
+    r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r.question) : null,
     sentNotes(d, r),
+    r.kind === 'vote' ? voteBoard(d, r) : null,
     pairOf(d, letters(d).filter((letter) => r.entries[letter]), (letter) => card(r, letter)));
+}
+
+// How a council's vote came out: each answer's points, and which one it starts from.
+// Right after the vote, you can start from another answer instead.
+function voteBoard(d, r) {
+  const v = r.vote;
+  if (!v) return null;
+  const order = Object.keys(v.points).sort((a, b) => v.points[b] - v.points[a] || v.first[b] - v.first[a]);
+  const top = Math.max(1, ...Object.values(v.points));
+  const last = d.rounds[d.rounds.length - 1];
+  const canPick = last.index === r.index && d.status.phase !== 'running';
+  const unread = Object.entries(r.entries).filter(([, e]) => e.ballot_problem);
+  return el('div', { class: 'vote-board' },
+    order.map((letter) => el('div', { class: `vote-row${letter === v.chosen ? ' chosen' : ''}` },
+      el('span', { class: 'vote-who' },
+        el('span', { class: `mdot ${memberClass(d, letter)}` }),
+        el('b', {}, NAMES[d.members[letter].tool]), ' ',
+        el('span', { class: 'model' }, modelLabel(d, letter)), ' ',
+        el('span', { class: 'letter' }, `member ${letter}`)),
+      el('span', { class: 'vote-bar' }, el('span', { style: `width: ${Math.round((v.points[letter] / top) * 100)}%` })),
+      el('span', { class: 'vote-points' }, `${plural(v.points[letter], 'point')} · ranked first ${v.first[letter]}×`),
+      letter === v.chosen
+        ? el('span', { class: 'vote-chosen' }, 'starting point')
+        : canPick ? el('button', { type: 'button', class: 'link accent', onclick: () => pickStart(letter) }, 'Start from this one') : el('span'))),
+    el('div', { class: 'vote-note' },
+      `${v.valid} of ${Object.keys(r.entries).length} ballots counted · starting point chosen ${v.chosen_by}. `
+      + 'A ballot gives an answer one point for every answer it ranks below it.'),
+    unread.map(([letter, e]) => el('div', { class: 'vote-note warn-text' }, `Member ${letter}'s ballot wasn't counted: ${e.ballot_problem}.`)));
+}
+
+function pickStart(letter) {
+  return attempt(async () => {
+    await api('POST', path('editor'), { member: letter });
+    refreshSoon();
+  });
 }
 
 // ---------------------------------------------------------------- where it ended
@@ -873,13 +935,22 @@ function currentRoundSection(d, r) {
 // The rounds of the latest question: from the last round of independent answers on.
 function currentRounds(d) {
   let start = 0;
-  for (const r of d.rounds) if (r.kind === 'answer') start = r.index;
+  for (const r of d.rounds) if (r.kind === 'answer' && !r.reopen) start = r.index;
   return d.rounds.filter((r) => r.index >= start);
 }
 
 // Each member's latest finished answer to the latest question, with the round it is from.
 function latestAnswers(d) {
   const latest = {};
+  if (d.council) {
+    // A council's result is its one shared answer, from the member who wrote it.
+    const done = (r) => Object.values(r.entries).every((e) => e.status === 'done');
+    const shared = [...currentRounds(d)].reverse().find((r) => (r.kind === 'merge' || r.kind === 'revise') && done(r));
+    if (shared) {
+      latest[Object.keys(shared.entries)[0]] = shared;
+      return latest;
+    }
+  }
   for (const r of currentRounds(d)) {
     if (!ANSWER_KINDS.has(r.kind)) continue;
     for (const [letter, e] of Object.entries(r.entries)) if (e.status === 'done') latest[letter] = r;
@@ -896,7 +967,7 @@ function resultSection(d) {
   const shown = letters(d).filter((letter) => latest[letter]);
   const asked = currentRounds(d)[0];
   return el('section', { class: 'answers', id: 'round-result' },
-    sectionHead('Their latest answers'),
+    sectionHead(d.council && shown.length === 1 ? "The council's answer" : 'Their latest answers'),
     asked.index > 0 ? followupBlock(asked.question) : null,
     pairOf(d, shown, (letter) => resultColumn(d, letter, latest[letter])));
 }
@@ -968,11 +1039,13 @@ function historyRound(d, r) {
 function tally(r) {
   const d = S.detail;
   const done = letters(d).filter((letter) => r.entries[letter] && r.entries[letter].status === 'done');
-  if (done.length < 2) return null;
-  if (r.kind === 'comment') {
-    if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'tally ok' }, 'no objections');
+  if (done.length < 2 || done.length < Object.keys(r.entries).length) return null;
+  if (r.kind === 'comment' || (d.council && r.kind === 'review')) {
+    const restart = done.filter((letter) => r.entries[letter].starting_point === 'change').length;
+    const again = restart ? ` · ${restart} of ${done.length} want a new start` : '';
+    if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'tally ok' }, `no objections${again}`);
     return el('span', { class: 'tally' },
-      `objections: ${done.map((letter) => `${shortWho(d, letter)} ${r.entries[letter].objections ?? '?'}`).join(', ')}`);
+      `objections: ${done.map((letter) => `${shortWho(d, letter)} ${r.entries[letter].objections ?? '?'}`).join(', ')}${again}`);
   }
   if (r.kind === 'review' || r.kind === 'discuss') {
     return el('span', { class: 'tally' },
@@ -984,6 +1057,16 @@ function tally(r) {
 // ---------------------------------------------------------------- one member's reply
 
 function subtitle(kind, letter, index) {
+  if (S.detail.council) {
+    const reopen = S.detail.rounds[index] && S.detail.rounds[index].reopen;
+    return {
+      answer: reopen ? 'its new answer' : index > 0 ? 'its own answer to the follow-up' : 'its own answer',
+      vote: 'its ballot',
+      merge: 'the merged answer',
+      review: 'its review',
+      revise: 'the revised answer',
+    }[kind];
+  }
   const other = otherName(S.detail, letter);
   return {
     answer: index > 0 ? 'its own answer to the follow-up' : 'its own answer',
@@ -1115,7 +1198,7 @@ async function showContext(round, letter) {
 function drawContext() {
   const d = S.detail;
   const { round, letter, items, tab } = S.context;
-  const other = otherLetter(d, letter);
+  const others = letters(d).filter((x) => x !== letter);
   const shown = tab === 'round' ? items.filter((i) => i.round === round && i.role === 'sent') : items;
   const tabButton = (name, label) => el('button', {
     type: 'button',
@@ -1138,7 +1221,7 @@ function drawContext() {
       el('div', { class: 'legend' },
         legend('src-you', 'You'),
         legend('src-fugue', "fugue's instructions"),
-        legend(`src-m ${memberClass(d, other)}`, d.members[other].name),
+        others.map((other) => legend(`src-m ${memberClass(d, other)}`, d.members[other].name)),
         legend(`src-m ${memberClass(d, letter)}`, `${d.members[letter].name}'s own replies`))),
     el('div', { class: 'context-body' }, shown.map((item) => contextItem(d, letter, item))),
     el('div', { class: 'context-foot' },
@@ -1212,8 +1295,13 @@ function contextBlock(cls, label, text) {
 // note or follow-up question, and the button that says what happens next.
 // A note goes out with the next round, so "Continue" takes it along.
 
+// "both members", or "every member" in a council.
+function everyone(d) {
+  return letters(d).length === 2 ? 'both members' : 'every member';
+}
+
 function modes(d) {
-  const all = { both: { label: 'To both' } };
+  const all = { both: { label: letters(d).length === 2 ? 'To both' : 'To everyone' } };
   for (const letter of letters(d)) all[letter] = { label: `To member ${letter}`, name: d.members[letter].name };
   all.ask = { label: 'Follow-up question' };
   return all;
@@ -1245,7 +1333,7 @@ function setMode(mode) {
     hint = phase === 'running' ? "It's asked once this round is done; each member answers on its own first."
       : 'Each member answers it on its own first.';
   } else {
-    const who = mode === 'both' ? 'both members' : m.name;
+    const who = mode === 'both' ? everyone(d) : m.name;
     placeholder = phase === 'finished' ? `Add a note to ${who} for one more round`
       : phase === 'running' ? `Add a note to ${who} for the next round`
         : `Add your view for the next round, to ${who} (optional)`;
@@ -1320,6 +1408,12 @@ function barActions(d) {
       primary = ask ? askButton
         : button(next ? `Continue: ${next}` : 'Continue', withText(() => control({ paused: false })), 'primary');
   }
+  // A council that has voted can answer again and vote again, when you think it started from the wrong answer.
+  const voted = currentRounds(d).some((r) => r.kind === 'vote' && r.vote);
+  const last = d.rounds[d.rounds.length - 1];
+  if (d.council && voted && last && last.kind !== 'vote' && ['paused', 'ready', 'finished'].includes(d.status.phase)) {
+    items.unshift(button('Vote again', () => request({ type: 'revote' }), 'ghost'));
+  }
   S.primary = primary;
   return [...items, primary];
 }
@@ -1358,7 +1452,7 @@ function sentNotes(d, r) {
     for (const note of (r.entries[letter] && r.entries[letter].notes) || []) {
       if (note.shared && seen.has(note.text)) continue;
       if (note.shared) seen.add(note.text);
-      out.push(youEntry(`${note.shared ? 'note to both' : `note to member ${letter}`}, sent with this round`, note.text));
+      out.push(youEntry(`${note.shared ? `note to ${everyone(d)}` : `note to member ${letter}`}, sent with this round`, note.text));
     }
   }
   return out;
@@ -1379,7 +1473,7 @@ function pendingSection(d) {
       if (note.shared && seen.has(note.text)) return;
       if (note.shared) seen.add(note.text);
       const remove = () => api('DELETE', path('notes'), { member: letter, index });
-      items.push(youEntry(`${note.shared ? 'note to both' : `note to member ${letter}`}, goes out with ${when}`, note.text,
+      items.push(youEntry(`${note.shared ? `note to ${everyone(d)}` : `note to member ${letter}`}, goes out with ${when}`, note.text,
         editLink(remove, note.text, note.shared ? 'both' : letter), removeLink(remove)));
     });
   }
@@ -1470,22 +1564,26 @@ function allLevels(models) {
 
 // One member's controls: the tool, then that tool's models and effort levels,
 // then extra arguments. `onchange` runs whenever any of them changes.
-function memberRow(index, chosen, onchange) {
+function memberRow(index, chosen, onchange, onremove = null) {
   const row = el('div', { class: 'member-row', dataset: { index } });
   const tool = el('select', { 'aria-label': `Member ${index + 1}'s tool`, class: 'tool' },
     TOOLS.map((t) => el('option', { value: t, selected: t === chosen.tool }, TOOL_LABELS[t])));
   const picker = el('span', { class: 'picker' });
   const args = el('input', { type: 'text', class: 'args', value: chosen.args || '', spellcheck: 'false' });
+  const commands = { claude: 'claude -p', codex: 'codex exec', dsh: 'dsh --profile headless' };
   const drawPicker = (current) => {
     const t = tool.value;
-    args.placeholder = `extra arguments for ${t === 'claude' ? 'claude -p' : 'codex exec'}, e.g. --add-dir ../shared`;
+    args.placeholder = `extra arguments for ${commands[t]}`;
     picker.replaceChildren(S.models ? modelPicker(t, current) : el('span', { class: 'muted' }, 'default model and effort'));
   };
   tool.addEventListener('change', () => { drawPicker({}); onchange(); });
   row.addEventListener('change', onchange);
   row.addEventListener('input', onchange);
   drawPicker(chosen);
-  row.append(el('span', { class: 'member-num' }, `Member ${index + 1}`), el('div', { class: 'member-body' }, tool, picker, args));
+  row.append(
+    el('span', { class: 'member-num' }, `Member ${index + 1}`),
+    el('div', { class: 'member-body' }, tool, picker, args),
+    onremove ? el('button', { type: 'button', class: 'link remove', title: 'Remove this member', onclick: onremove }, 'Remove') : null);
   row.read = () => {
     const modelChoice = row.querySelector('select.model');
     const model = !modelChoice ? chosen.model || ''
@@ -1534,22 +1632,45 @@ function modelPicker(tool, chosen) {
 }
 
 // The two member rows, with a hint under them, for the New question form and Settings.
+const MAX_MEMBERS = 4;
+
+// Two to four member rows, with a hint under them, for the New question form and Settings.
 function membersField(chosen) {
   const hint = el('div', { class: 'hint' });
   const warning = el('div', { class: 'hint warn-text' });
-  const rows = [];
+  const list = el('div', { class: 'member-list' });
+  const add = el('button', { type: 'button', class: 'link accent add-member' }, '+ Add a member');
+  const mode = el('div', { class: 'hint' });
+  let lineup = chosen.length >= 2 ? chosen.slice(0, MAX_MEMBERS) : [{ tool: 'claude' }, { tool: 'codex' }];
+  let rows = [];
   const update = () => {
-    const [a, b] = rows.map((row) => row.read());
-    const sameModel = a.tool === b.tool && (a.model || '') === (b.model || '');
-    warning.textContent = sameModel
-      ? 'Both members run the same model, so they tend to share blind spots and miss the same things. '
-        + 'Different models, or at least different efforts, catch more of each other\'s mistakes.'
+    const picked = rows.map((row) => row.read());
+    const same = picked.some((a, i) => picked.some((b, j) => j > i && a.tool === b.tool && (a.model || '') === (b.model || '')));
+    warning.textContent = same
+      ? 'Some members run the same model, so they tend to share blind spots and miss the same things. '
+        + "Different models, or at least different efforts, catch more of each other's mistakes."
       : '';
-    warning.hidden = !sameModel;
+    warning.hidden = !same;
+    mode.textContent = picked.length === 2
+      ? 'Two members answer on their own, then comment on each other\'s answer and update their own, side by side.'
+      : `${picked.length} members answer on their own, then vote for the best answer to start from. Its author merges the `
+        + "others' best points into it, the others review it, and it is revised until no one objects.";
   };
-  const lineup = chosen.length === 2 ? chosen : [{ tool: 'claude' }, { tool: 'codex' }];
-  lineup.forEach((member, index) => rows.push(memberRow(index, member, update)));
-  update();
+  const draw = () => {
+    rows = lineup.map((member, index) => memberRow(index, member, update, lineup.length > 2 ? () => {
+      lineup = rows.map((row) => row.read()).filter((_, i) => i !== index);
+      draw();
+    } : null));
+    list.replaceChildren(...rows);
+    add.hidden = lineup.length >= MAX_MEMBERS;
+    update();
+  };
+  add.addEventListener('click', () => {
+    const used = rows.map((row) => row.read());
+    lineup = [...used, { tool: TOOLS.find((t) => !used.some((m) => m.tool === t)) || 'claude' }];
+    draw();
+  });
+  draw();
   if (S.models) {
     const codex = S.models.codex;
     const when = codex.checked_at ? ` on ${new Date(codex.checked_at * 1000).toLocaleString()}` : '';
@@ -1565,13 +1686,15 @@ function membersField(chosen) {
           const current = rows.map((row) => row.read());
           box.replaceChildren(el('span', { class: 'muted' }, 'Asking Codex for its models…'));
           await loadModels(true);
-          box.replaceWith(membersField(current));
+          const fresh = membersField(current);
+          box.replaceWith(fresh);
+          box.read = fresh.read;
         },
       }, 'Ask Codex again'));
   } else {
     hint.textContent = "Couldn't load the model lists; members whose model you don't set use their tool's default.";
   }
-  const box = el('div', { class: 'members' }, rows, warning, hint);
+  const box = el('div', { class: 'members' }, list, add, mode, warning, hint);
   box.read = () => rows.map((row) => row.read());
   return box;
 }
@@ -1596,7 +1719,8 @@ async function showNewQuestion() {
   const pause = defaults ? defaults.pause_after_each_round : true;
   const web = defaults ? defaults.web : true;
   const lineup = (defaults ? defaults.members : [{ tool: 'claude' }, { tool: 'codex' }])
-    .map((m) => (m.model ? `${TOOL_LABELS[m.tool]} (${m.model})` : TOOL_LABELS[m.tool])).join(' and ');
+    .map((m) => (m.model ? `${TOOL_LABELS[m.tool]} (${m.model})` : TOOL_LABELS[m.tool]));
+  const lineupText = lineup.length === 2 ? lineup.join(' and ') : `${lineup.slice(0, -1).join(', ')} and ${lineup[lineup.length - 1]}`;
   const membersSlot = el('div', {}, el('span', { class: 'muted' }, 'Loading the model lists…'));
 
   // Who answers and how it runs start from Settings and stay folded into one line until you change them.
@@ -1618,7 +1742,7 @@ async function showNewQuestion() {
       el('div', { class: 'label' }, 'Members'),
       membersSlot));
   const summary = el('span', {},
-    `${lineup} · ${plural(rounds, 'round')} of comments and updates · ${pause ? 'pauses after each round' : 'runs to the end'} · ${web ? 'web on' : 'no web'}`);
+    `${lineupText} · ${plural(rounds, 'round')} of ${lineup.length > 2 ? 'review' : 'comments and updates'} · ${pause ? 'pauses along the way' : 'runs to the end'} · ${web ? 'web on' : 'no web'}`);
   const change = el('button', {
     class: 'link',
     type: 'button',
@@ -1640,7 +1764,7 @@ async function showNewQuestion() {
       rows: 8,
       required: true,
       'aria-label': 'Question',
-      placeholder: 'What should both members answer? Each answers on its own first.',
+      placeholder: 'What should the members answer? Each answers on its own first.',
       onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
     }),
     el('div', { class: 'folder-row' },
