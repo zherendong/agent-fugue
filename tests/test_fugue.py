@@ -880,7 +880,7 @@ def test_a_question_with_attachments_and_no_folder(env, capsys):
     discussion = latest()
     folder = discussion.attachments_dir
     assert discussion.state["no_folder"] and Path(discussion.state["cwd"]) == folder
-    assert sorted(p.name for p in folder.iterdir()) == ["resume.pdf", "resume.pdf.txt", "shot.png"]
+    assert sorted(p.name for p in folder.iterdir()) == ["resume.pdf", "resume.pdf.page-1.png", "resume.pdf.txt", "shot.png"]
     made = calls(env)
     assert all(Path(c["cwd"]).resolve() == folder.resolve() for c in made)
     claude, codex = to("claude", made), to("codex", made)
@@ -888,10 +888,13 @@ def test_a_question_with_attachments_and_no_folder(env, capsys):
         assert call["prompt"].startswith("Review this resume.\n\nThe user attached these files")
         assert f"{folder / 'resume.pdf.txt'}" in call["prompt"]
     assert "Open it with your image or file reading tool." in claude["prompt"]
+    assert "Open the PDF itself with your file reader" in claude["prompt"]
     assert "It is also attached to this message." in codex["prompt"]
+    assert "Its pages are attached to this message as images" in codex["prompt"]
     assert f"--image={folder / 'shot.png'}" in codex["args"] and codex["args"][-1] == "-"
+    assert f"--image={folder / 'resume.pdf.page-1.png'}" in codex["args"]
     text = discussion.transcript_path.read_text()
-    assert f"- `{folder / 'resume.pdf'}` (and its text: resume.pdf.txt)" in text
+    assert f"- `{folder / 'resume.pdf'}` (and its text: resume.pdf.txt, 1 page image)" in text
     # The folders offered for new questions leave this one out.
     assert discussion.state["cwd"] not in [d.state["cwd"] for d in list_discussions() if not d.state.get("no_folder")]
 

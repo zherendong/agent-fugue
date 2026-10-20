@@ -122,8 +122,7 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
         notes = discussion.take_notes(agent)
         asked = question
         if kind == "answer" and question is not None:
-            asked = attachments.with_attachments(question, files,
-                                                 images_attached=discussion.members[agent]["tool"] == "codex")
+            asked = attachments.with_attachments(question, files, tool=discussion.members[agent]["tool"])
         prompt = build_prompt(kind, me=agent, other=sender,
                               question=asked, followup=followup, messages=messages,
                               notes=[(n["text"], n["shared"]) for n in notes], closing=closing)

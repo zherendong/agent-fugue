@@ -279,7 +279,7 @@ def create_round(discussion: Discussion, kind: str, *, question: str | None = No
         notes = discussion.take_notes(letter)
         asked = question
         if kind == "answer" and question is not None:
-            asked = with_attachments(question, files, images_attached=discussion.members[letter]["tool"] == "codex")
+            asked = with_attachments(question, files, tool=discussion.members[letter]["tool"])
         prompt = build_council_prompt(
             kind, me=letter, letters=letters, editor=editor, question=asked,
             followup=kind == "answer" and index > 0 and not reopen, reopen=reopen, later=plan.get("later", False),

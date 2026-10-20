@@ -107,7 +107,13 @@ def attachment_lines(records: list[dict] | None) -> list[str]:
         return []
     lines = ["Attached:", ""]
     for record in records:
-        extra = " (and its text: " + Path(record["text"]).name + ")" if record.get("text") else ""
+        extras = []
+        if record.get("text"):
+            extras.append("its text: " + Path(record["text"]).name)
+        if record.get("page_images"):
+            count = len(record["page_images"])
+            extras.append(f"{count} page image{'' if count == 1 else 's'}")
+        extra = f" (and {', '.join(extras)})" if extras else ""
         lines.append(f"- `{record['path']}`{extra}")
     return lines + [""]
 

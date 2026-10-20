@@ -744,9 +744,16 @@ function textPreview(url, how) {
 function whatMembersGet(a) {
   switch (a.kind) {
     case 'image': return 'The members can open this image; Codex also gets it with its message.';
-    case 'pdf':
+    case 'pdf': {
+      const pages = (a.page_images || []).length;
+      const parts = [a.text ? 'the text fugue took out of it' : null,
+        pages ? `${plural(pages, 'page')} as images, which Codex gets with its message` : null].filter(Boolean);
+      const extra = parts.length ? `, with ${parts.join(' and ')}` : '';
+      const missing = a.text ? '' : ` There is no text version: ${a.note || 'it has no text'}.`;
+      return `The members get the PDF${extra}. Claude Code reads the PDF itself.${missing}`;
+    }
     case 'word':
-      return a.text ? `The members get the ${a.kind === 'pdf' ? 'PDF' : 'Word file'} and the text fugue took out of it.`
+      return a.text ? 'The members get the Word file and the text fugue took out of it.'
         : `The members get the file, but no text version: ${a.note || 'it has no text'}.`;
     case 'text': return 'The members read this file as it is.';
     default: return 'The members get the file and decide how to read it.';

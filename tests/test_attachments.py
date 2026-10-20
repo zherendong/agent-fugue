@@ -10,9 +10,9 @@ from pathlib import Path
 from fugue import attachments
 
 
-def tiny_pdf(text: str) -> bytes:
-    """A one-page PDF with a line of text, written by hand."""
-    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+def tiny_pdf(text: str, *, drawing: bytes | None = None) -> bytes:
+    """A one-page PDF with a line of text, written by hand; `drawing` replaces how the text is drawn."""
+    stream = b"BT /F1 12 Tf 72 720 Td " + (drawing or f"({text}) Tj".encode()) + b" ET"
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -66,10 +66,35 @@ def test_files_are_kept_with_a_text_version_of_pdf_and_word(tmp_path):
     assert "Ten years of Rust" in Path(by_name["resume.pdf"]["text"]).read_text()
     assert Path(by_name["design.docx"]["text"]).read_text() == "Goals\nKeep the cache warm\nOption | Cost\nDisk | low\n"
     assert [by_name[n]["kind"] for n in ("shot.png", "notes.md", "blob.bin")] == ["image", "text", "other"]
+    pdf = by_name["resume.pdf"]
+    assert [Path(p).name for p in pdf["page_images"]] == ["resume.pdf.page-1.png"]
+    assert Path(pdf["page_images"][0]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
     block = attachments.prompt_block(saved)
-    assert "- resume.pdf (a PDF, 1 pages" in block and f"Its text, taken out of the file: {by_name['resume.pdf']['text']}" in block
+    assert "- resume.pdf (a PDF, 1 page, " in block and f"Its text version: {pdf['text']}" in block
+    assert "The original files are what counts" in block
+    assert f"Its pages as images, to open with your image reading tool: {pdf['page_images'][0]}" in block
     assert "Open it with your image or file reading tool." in block
-    assert "It is also attached to this message." in attachments.prompt_block(saved, images_attached=True)
+    # Each tool is told what suits it: Claude Code opens the PDF itself, Codex gets the pages with its message.
+    claude, codex = attachments.prompt_block(saved, tool="claude"), attachments.prompt_block(saved, tool="codex")
+    assert "Open the PDF itself with your file reader" in claude and pdf["page_images"][0] not in claude
+    assert "Its pages are attached to this message as images (1 page)." in codex
+    assert "It is also attached to this message." in codex
+    assert attachments.images(saved) == [pdf["page_images"][0], by_name["shot.png"]["path"]]
+
+
+def test_words_drawn_a_few_letters_at_a_time_stay_whole(tmp_path):
+    # LaTeX often draws a word in pieces; reading by gaps alone made "REVOLVE" into "REVOL VE".
+    record = attachments.save(tmp_path, "cv.pdf", tiny_pdf("", drawing=b"(T) Tj 9 0 Td (ools) Tj"))
+    assert Path(record["text"]).read_text().strip().endswith("Tools")
+    assert attachments.tidy("  a    b  \n\n\n\n c ") == "a b\n\nc"
+
+
+def test_long_pdfs_show_only_their_first_pages(tmp_path, monkeypatch):
+    monkeypatch.setattr(attachments, "MAX_PAGE_IMAGES", 0)
+    record = attachments.save(tmp_path, "long.pdf", tiny_pdf("One page"))
+    assert record["page_images"] == [] and record["images_note"] == "only its first 0 of 1 pages are shown as images"
+    assert "Note: only its first 0 of 1 pages are shown as images." in attachments.prompt_block([record], tool="dsh")
 
 
 def test_a_pdf_without_text_says_so(tmp_path):
