@@ -52,6 +52,29 @@ def unseen(discussion: Discussion, agent: str, before: int) -> list[int]:
     ]
 
 
+def closing_readers(rnd: dict) -> list[str]:
+    """After a comment round with no objections: the members whose answers got suggestions.
+
+    Each writes one closing version taking in the suggestions it accepts. A
+    comment from a version of fugue that didn't ask for the count has none.
+    """
+    if rnd["kind"] != "comment" or not agreed(rnd):
+        return []
+    letters = list(rnd["entries"])
+    return [other for letter in letters for other in letters
+            if other != letter and (rnd["entries"][letter].get("suggestions") or 0) > 0]
+
+
+def agreement(rounds: list[dict]) -> dict | None:
+    """The round in which the members agreed, if the latest question ended that way (closing versions included)."""
+    if not rounds:
+        return None
+    last = rounds[-1]
+    if last.get("closing") and len(rounds) > 1 and agreed(rounds[-2]):
+        return rounds[-2]
+    return last if agreed(last) else None
+
+
 def agreed(rnd: dict) -> bool:
     """True when, in a comment round (or a council's review), no member objects to the answer it read."""
     if rnd["kind"] == "review":
@@ -65,10 +88,11 @@ def agreed(rnd: dict) -> bool:
 
 
 def create_round(discussion: Discussion, kind: str, participants: list[str], question: str | None = None,
-                 files: list[dict] | None = None) -> dict:
+                 files: list[dict] | None = None, closing: bool = False) -> dict:
     """Add a round, writing the exact message each participant will receive.
 
     `files` are the attachments that come with the question of an answer round.
+    `closing` marks the update after an agreement, which takes in the last suggestions.
     """
     if discussion.rounds and not is_complete(discussion.rounds[-1]):
         raise FugueError("The last round hasn't finished. Continue the discussion to retry it first.")
@@ -79,6 +103,8 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
         rnd["question"] = question
         if files:
             rnd["attachments"] = files
+    if closing:
+        rnd["closing"] = True
 
     planned = {}
     for agent in participants:
@@ -100,7 +126,7 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
                                                  images_attached=discussion.members[agent]["tool"] == "codex")
         prompt = build_prompt(kind, me=agent, other=sender,
                               question=asked, followup=followup, messages=messages,
-                              notes=[(n["text"], n["shared"]) for n in notes])
+                              notes=[(n["text"], n["shared"]) for n in notes], closing=closing)
         discussion.prompt_path(index, agent).write_text(prompt)
         rnd["entries"][agent] = {"status": "pending", "forwarded": forwarded, "notes": notes}
     discussion.rounds.append(rnd)
@@ -117,6 +143,23 @@ COUNT_PATTERNS = [
     # The line asked for by earlier versions of fugue.
     re.compile(r"remaining\s+disagreements?\s*[:：]\s*\**\s*(\d+|none|zero)", re.IGNORECASE),
 ]
+
+
+SUGGESTION_PATTERNS = [
+    re.compile(r"suggestions?\s*[:：]\s*\**\s*(\d+|none|zero)", re.IGNORECASE),
+    re.compile(r"建议\s*[:：]\s*\**\s*(\d+|无)"),
+]
+
+
+def parse_suggestions(reply: str) -> int | None:
+    """Read the 'Suggestions: N' line that follows the objections."""
+    for line in reversed([line for line in reply.splitlines() if line.strip()][-5:]):
+        for pattern in SUGGESTION_PATTERNS:
+            match = pattern.search(line)
+            if match:
+                value = match.group(1).lower()
+                return int(value) if value.isdigit() else 0
+    return None
 
 
 def parse_objections(reply: str) -> int | None:
@@ -177,6 +220,7 @@ def _record(discussion: Discussion, rnd: dict, call: AgentCall) -> None:
     entry.pop("error", None)
     if rnd["kind"] in ("comment", "review"):
         entry["objections"] = parse_objections(outcome.reply)
+        entry["suggestions"] = parse_suggestions(outcome.reply)
     council.record(discussion, rnd, call.agent, outcome.reply)
     if outcome.cost_usd is not None:
         entry["cost_usd"] = outcome.cost_usd
@@ -280,8 +324,10 @@ def run_round(discussion: Discussion, rnd: dict, *, should_stop: Callable[[], bo
 def automatic_step(rounds: list[dict], control: dict) -> dict | None:
     """The next round when nobody asked for one: comments and updates until agreement or the round limit."""
     last = rounds[-1]
-    if agreed(last):
+    if last.get("closing"):
         return None
+    if agreed(last):
+        return {"action": "next", "closing": True} if closing_readers(last) else None
     current = current_question(rounds)
     if any(rnd["kind"] == "final" for rnd in current):
         return None  # discussions made by earlier versions of fugue ended with final answers
@@ -318,6 +364,7 @@ STEP_LABELS = {
     "ask": "each answers your follow-up on their own",
     "comment": "each comments on the other's answer",
     "update": "each updates their answer",
+    "closing": "the final versions, taking in the last suggestions",
 }
 
 
@@ -331,6 +378,8 @@ def step_label(rounds: list[dict], step: dict | None, in_council: bool = False) 
         return council.step_label(rounds, "reopen")
     if in_council and step["action"] == "next":
         return council.step_label(rounds, step.get("kind") or council.NATURAL_NEXT[rounds[-1]["kind"]])
+    if step["action"] == "next" and step.get("closing"):
+        return STEP_LABELS["closing"]
     if step["action"] == "next":
         return STEP_LABELS[NEXT_KIND[rounds[-1]["kind"]]]
     return STEP_LABELS.get(step["action"], step["action"])
@@ -373,8 +422,9 @@ def describe(discussion: Discussion) -> dict:
         label = f"Paused after step {step_number(last['index'])}" if last else "Paused"
         return {"phase": "paused", "label": label, "detail": state.get("problem", ""), "needs_you": True,
                 "next": next_step}
-    if last and agreed(last):
-        return {"phase": "finished", "label": f"Agreed in step {step_number(last['index'])}", "needs_you": False,
+    agreed_in = agreement(rounds)
+    if agreed_in:
+        return {"phase": "finished", "label": f"Agreed in step {step_number(agreed_in['index'])}", "needs_you": False,
                 "next": None}
     comments = [rnd for rnd in current_question(rounds)
                 if rnd["kind"] == "comment" or (in_council and rnd["kind"] == "review")]
@@ -474,8 +524,10 @@ class Runner:
                     discussion.emit({"type": "notice", "level": "info",
                                      "text": "No reviewer objects: the council agrees." if rnd["kind"] == "review"
                                      else "No objections on either side: the members agree."})
-                # A council pauses only after its vote and after each revision.
-                if discussion.read_control()["pause_after_each_round"] and (
+                # A council pauses only after its vote and after each revision. An agreement
+                # with suggestions goes straight on to the closing versions, which end it.
+                closing_next = bool(closing_readers(rnd) or council.closing_reviewed(rnd))
+                if discussion.read_control()["pause_after_each_round"] and not closing_next and (
                         not council.is_council(discussion.members) or rnd["kind"] in council.PAUSE_AFTER):
                     discussion.update_control(paused=True)
         except KeyboardInterrupt:
@@ -501,6 +553,8 @@ class Runner:
         elif action == "ask":
             rnd = create_round(discussion, "answer", list(discussion.members), question=step["request"]["question"],
                                files=step["request"].get("attachments"))
+        elif action == "next" and step.get("closing"):
+            rnd = create_round(discussion, "update", closing_readers(discussion.rounds[-1]), closing=True)
         elif action == "next":
             rnd = create_round(discussion, next_kind(discussion), list(discussion.members))
         else:
@@ -522,6 +576,8 @@ class Runner:
             kind = step.get("kind") or council.NATURAL_NEXT[discussion.rounds[-1]["kind"]]
             if kind == "reopen":
                 rnd = council.create_round(discussion, "answer", reopen=True)
+            elif kind == "closing":
+                rnd = council.create_round(discussion, "revise", closing=True)
             else:
                 rnd = council.create_round(discussion, kind)
         else:

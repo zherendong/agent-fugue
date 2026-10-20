@@ -12,7 +12,8 @@ def out(obj):
 
 
 def council_lines(prompt):
-    """What a council round asks for: a ranking in a vote, the starting point in a review.
+    """What a round asks for at its end: a ranking in a vote, the number of suggestions (FAKE_SUGGESTIONS)
+    in a comment or review, the starting point in a review.
     FAKE_PREFER (e.g. "B,C,A") orders the ranking; without it, the order the answers came in."""
     import re
     out = ""
@@ -21,6 +22,11 @@ def council_lines(prompt):
         prefer = [x for x in os.environ.get("FAKE_PREFER", "").split(",") if x]
         given.sort(key=lambda x: prefer.index(x) if x in prefer else len(prefer))
         out += "\nRanking: " + ", ".join(given)
+    for heading in ("## Responses", "## Points not taken"):
+        if f'says exactly "{heading}"' in prompt:
+            out += f"\n\n{heading}\n\nI took the points that hold up."
+    if "Suggestions: <number>" in prompt:
+        out += "\nSuggestions: " + os.environ.get("FAKE_SUGGESTIONS", "0")
     if "Starting point: <keep or change>" in prompt:
         out += "\nStarting point: " + os.environ.get("FAKE_STARTING_POINT", "keep")
     return out

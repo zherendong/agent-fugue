@@ -16,6 +16,15 @@ that nobody defers to, or discounts, a name, and so that a reply forwarded
 from one member to another still says unambiguously who is meant: "the other
 member" would mean someone different to the reader than to the writer.
 
+Members write about themselves in the first person and call the others by
+letter. Every answer they write stands on its own: the discussion about it
+(responses to objections, points not taken) comes after it, under a fixed
+heading the page uses to tell the two apart.
+
+When a comment round (or a council's review) ends with no objections but
+with suggestions, the members whose answers got suggestions write one closing
+version that takes in the ones they accept, and the discussion stops there.
+
 Long forwarded content goes first and the instructions come after it,
 because models follow instructions better when they come after the material
 they refer to. Placeholders: {me} is the receiving member's letter, {other}
@@ -34,8 +43,8 @@ BALLOT_KINDS = ("vote",)
 WHO = "You are member {me} of a council of two; the other member is member {other}."
 
 LETTERS = (
-    "Call yourself member {me} and the other member member {other}, in every reply. You may write the "
-    'word "member" in the language you are writing in, but keep the letters, and never just say "the '
+    'Write about yourself in the first person ("I"), and call the other member member {other}. You may write '
+    'the word "member" in the language you are writing in, but keep the letter, and never just say "the '
     "other member\": your replies are passed on, and the phrase would mean someone else to the reader. "
     "Don't name the tool or model either of you runs on."
 )
@@ -50,22 +59,23 @@ COMMENT_TASK = """\
 Comment on member {other}'s answer as it stands now. Member {other} will read your comments and update their answer; you will update yours in the next round, so don't rewrite your own answer here.
 
 1. What they got right that you missed or gave too little weight. Say so plainly.
-2. What is wrong, unsupported or risky, and why. Where you can check one of their claims yourself (in the code, the docs, or by running a command), check it rather than trusting it.
-3. What important point is missing.{rejections}
+2. What is wrong, unsupported or risky, and why. Where you can check one of their claims yourself (in the code, the docs, or by running a command), check it rather than trusting it. Cite what you checked (a link, a file, a command), not how you went about it.
+3. What important point is missing for what the user asked. Something beyond the question (a related topic, a next step) is a suggestion at most.{rejections}
 
 Judge only what their answer says now: don't repeat a point it already handles, and don't invent objections. If their answer shows a mistake in yours, note it in one line.
 
-Keep two kinds of point apart. An objection is a problem that would change their answer's conclusions or recommendations if it were fixed: an error, an unsupported claim, or an omission that matters for the user's decision. Anything smaller (more precision, extra detail, better wording, a nice-to-have) goes in a short list of suggestions at the end, marked as suggestions; member {other} may take them or leave them."""
+Keep two kinds of point apart. An objection is a problem that would change their answer's conclusions or recommendations if it were fixed: an error, an unsupported claim, or an omission that matters for what the user asked. Anything smaller (more precision, extra detail, better wording, a nice-to-have) goes in a short list of suggestions at the end, marked as suggestions; member {other} may take them or leave them."""
 
 COMMENT_REJECTIONS = """
 4. Where member {other} turned down one of your earlier comments, say whether their reasons convince you. If they do, drop the point; if not, say what evidence would settle it."""
 
 COMMENT_FOOTER = """\
-Write in the same language as the question. End with this line, kept in English and exactly in this form even if the rest is in another language:
+Write in the same language as the question. End with these two lines, kept in English and exactly in this form even if the rest is in another language:
 
 Objections: <number>
+Suggestions: <number>
 
-where <number> counts your objections only, not your suggestions: the problems in member {other}'s current answer that would change its conclusions or recommendations if fixed. Write 0 if you would accept its conclusions and recommendations as they stand."""
+The first counts your objections only, not your suggestions: the problems in member {other}'s current answer that would change its conclusions or recommendations if fixed. Write 0 if you would accept its conclusions and recommendations as they stand. The second counts your suggestions; write 0 if you have none."""
 
 UPDATE_INTRO = WHO + " Here are member {other}'s comments on your answer:"
 
@@ -73,12 +83,26 @@ UPDATE_INTRO = WHO + " Here are member {other}'s comments on your answer:"
 # so whoever reads the reply (the user, or the page's "Where it ended") meets
 # the answer straight away.
 UPDATE_TASK = """\
-Update your answer in light of member {other}'s comments. Where you can check one of their claims yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve your answer.
+Update your answer in light of member {other}'s comments. Where you can check one of their claims yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve your answer. Keep the layout of your previous answer unless changing it is the point, so the user can see what changed.
 
 Write your reply in two parts, in this order:
 
-1. Your full updated answer to the question. It must stand on its own for a reader who has seen nothing else: no references to earlier rounds, to "my previous answer" or to the comments. Where a point is still disputed between you and member {other}, say so in the answer and give both views.
-2. After the answer, under a heading of its own, your response to member {other}'s objections: for each one, say whether you accept it, accept part of it, or turn it down, with your reasons in a sentence or two. You don't need to explain skipping a suggestion.
+1. Your full updated answer to the question. It must stand on its own for a reader who has seen nothing else: no references to earlier rounds, to "my previous answer", to the comments or to member {other}. Leave the discussion out of it: points still in dispute belong in the second part.
+2. A line that says exactly "## Responses", in English whatever language you write in. Then your response to member {other}'s objections: for each one, say whether you accept it, accept part of it, or turn it down, with your reasons in a sentence or two. You don't need to explain skipping a suggestion.
+
+Write in the same language as the question."""
+
+# After a comment round with no objections but with suggestions: the last
+# version, which takes in the suggestions the member accepts.
+CLOSING_INTRO = WHO + " Member {other} has no objections to your answer. Here are their comments, which end with suggestions:"
+
+CLOSING_TASK = """\
+This is your final version. Take the suggestions that improve your answer and leave the rest. Change only what they call for and keep the layout, so the user can see what changed.
+
+Write your reply in two parts, in this order:
+
+1. Your full final answer to the question. It must stand on its own for a reader who has seen nothing else: no references to earlier rounds, to "my previous answer", to the comments or to member {other}.
+2. A line that says exactly "## Responses", in English whatever language you write in. Then, a line each, the suggestions you didn't take and why.
 
 Write in the same language as the question."""
 
@@ -115,13 +139,15 @@ def build_prompt(
     followup: bool = False,
     messages: list[tuple[int, str, str]] = (),
     notes: list[tuple[str, bool]] = (),
+    closing: bool = False,
 ) -> str:
     """Build the message for one member in one round.
 
     `me` and `other` are the members' letters. `messages` holds (round index,
     round kind, reply text) of the other member's replies this member hasn't
     seen yet. `notes` holds (text, shared) pairs from the user, where `shared`
-    means the other member got the same note.
+    means the other member got the same note. `closing` marks the last update,
+    after a comment round with suggestions but no objections.
     """
     def fill(template: str, **extra) -> str:
         return template.format(me=me, other=other, **extra)
@@ -149,9 +175,9 @@ def build_prompt(
         parts.append(fill(COMMENT_TASK, rejections=fill(COMMENT_REJECTIONS) if later else ""))
         parts.append(fill(LETTERS))
     elif kind == "update":
-        parts.append(fill(UPDATE_INTRO))
+        parts.append(fill(CLOSING_INTRO if closing else UPDATE_INTRO))
         parts.extend(blocks)
-        parts.append(fill(UPDATE_TASK))
+        parts.append(fill(CLOSING_TASK if closing else UPDATE_TASK))
         parts.append(fill(LETTERS))
     else:
         raise ValueError(f"unknown round kind: {kind}")
@@ -181,10 +207,10 @@ def build_prompt(
 COUNCIL_WHO = "You are member {me} of a council of {count}: members {members}."
 
 COUNCIL_LETTERS = (
-    "Call yourself member {me} and the others by their letters (member A, member B, ...), in every reply. You may "
-    'write the word "member" in the language you are writing in, but keep the letters, and never just say "the '
-    'other member": your replies are passed on, and the phrase would mean someone else to the reader. Don\'t name '
-    "the tool or model any of you runs on."
+    'Write about yourself in the first person ("I"), and call the others by their letters (member A, member B, '
+    '...). You may write the word "member" in the language you are writing in, but keep the letters, and never '
+    'just say "the other member": your replies are passed on, and the phrase would mean someone else to the '
+    "reader. Don't name the tool or model any of you runs on."
 )
 
 COUNCIL_FOLLOWUP_INTRO = (
@@ -222,8 +248,8 @@ MERGE_TASK = """\
 Write the council's shared answer, starting from your own.
 
 1. Merge in the points from the other members' answers that make it more correct or more complete: you read their answers when you voted. Fix the problems the ballots found in your answer where you agree they are problems. Where you can check a claim yourself, check it rather than trusting it.
-2. It must stand on its own for a reader who has seen nothing else: no references to members, votes or earlier answers. Where members disagree on something that matters, say so and give the views.
-3. After the answer, under a heading of its own, list the points from other members' answers that you did not take, each with the member's letter and your reason in a sentence or two.
+2. It must stand on its own for a reader who has seen nothing else: no references to members, votes or earlier answers. Leave the discussion out of it: what members disagree on belongs in the third part.
+3. After the answer, a line that says exactly "## Points not taken", in English whatever language you write in. Then the points from other members' answers that you did not take, each with the member's letter and your reason in a sentence or two, and anything that matters on which members disagree.
 
 Write in the same language as the question."""
 
@@ -239,9 +265,9 @@ REVIEW_INTRO_LATER = (
 REVIEW_TASK = """\
 Review this answer as it stands now. Member {editor} will read the reviews and revise it.
 
-1. What is wrong, unsupported or risky, and why. Where you can check a claim yourself, check it rather than trusting it.
+1. What is wrong, unsupported or risky, and why. Where you can check a claim yourself, check it rather than trusting it. Cite what you checked (a link, a file, a command), not how you went about it.
 2. Points of yours that were left out or misrepresented and still matter: say which, and why the reason given for leaving them out doesn't hold.
-3. What important point is missing.{rejections}
+3. What important point is missing for what the user asked. Something beyond the question (a related topic, a next step) is a suggestion at most.{rejections}
 
 Judge only what the answer says now: don't repeat a point it already handles, and don't invent objections.
 
@@ -251,22 +277,39 @@ REVIEW_REJECTIONS = """
 4. Where member {editor} turned down one of your earlier objections, say whether their reasons convince you. If they do, drop the point; if not, say what evidence would settle it."""
 
 REVIEW_FOOTER = """\
-Write in the same language as the question. End with these two lines, kept in English and exactly in this form even if the rest is in another language:
+Write in the same language as the question. End with these three lines, kept in English and exactly in this form even if the rest is in another language:
 
 Objections: <number>
+Suggestions: <number>
 Starting point: <keep or change>
 
-where <number> counts your objections only, not your suggestions (0 if you would accept the answer's conclusions and recommendations as they stand), and "change" means you think another member's answer would have been a clearly better place to start, so the council should answer again and vote again. Write "keep" otherwise."""
+where the first <number> counts your objections only, not your suggestions (0 if you would accept the answer's conclusions and recommendations as they stand), the second counts your suggestions (0 if none), and "change" means you think another member's answer would have been a clearly better place to start, so the council should answer again and vote again. Write "keep" otherwise."""
 
 REVISE_INTRO = COUNCIL_WHO + " Here are the other members' reviews of the council's answer you wrote:"
 
 REVISE_TASK = """\
-Revise the council's answer in light of the reviews. Where you can check a reviewer's claim yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve the answer.
+Revise the council's answer in light of the reviews. Where you can check a reviewer's claim yourself, check it rather than trusting it. Don't give up a point you still believe is right, and don't keep one you now think is wrong. Take the suggestions that improve the answer. Keep the layout of the previous version unless changing it is the point, so the user can see what changed.
 
 Write your reply in two parts, in this order:
 
-1. The full revised answer. It must stand on its own for a reader who has seen nothing else: no references to members, reviews or earlier versions. Where members still disagree on something that matters, say so and give the views.
-2. After the answer, under a heading of its own, your response to each reviewer's objections: for each one, say whether you accept it, accept part of it, or turn it down, with your reasons in a sentence or two. Then, under its own heading, the points from other members you still have not taken, with your reasons.
+1. The full revised answer. It must stand on its own for a reader who has seen nothing else: no references to members, reviews or earlier versions. Leave the discussion out of it: what members still disagree on belongs in the second part.
+2. A line that says exactly "## Responses", in English whatever language you write in. Then your response to each reviewer's objections: for each one, say whether you accept it, accept part of it, or turn it down, with your reasons in a sentence or two. Then, under its own heading, the points from other members you still have not taken, with your reasons.
+
+Write in the same language as the question."""
+
+
+CLOSING_REVISE_INTRO = (
+    COUNCIL_WHO + " No reviewer objects to the council's answer you wrote. Here are the reviews, which end with "
+    "suggestions:"
+)
+
+CLOSING_REVISE_TASK = """\
+This is the council's final version. Take the suggestions that improve the answer and leave the rest. Change only what they call for and keep the layout, so the user can see what changed.
+
+Write your reply in two parts, in this order:
+
+1. The full final answer. It must stand on its own for a reader who has seen nothing else: no references to members, reviews or earlier versions.
+2. A line that says exactly "## Responses", in English whatever language you write in. Then, a line each, the suggestions you didn't take and why.
 
 Write in the same language as the question."""
 
@@ -285,6 +328,7 @@ def build_council_prompt(
     followup: bool = False,
     reopen: bool = False,
     later: bool = False,
+    closing: bool = False,
     messages: list[tuple[int, str, str, str]] = (),
     notes: list[tuple[str, bool]] = (),
 ) -> str:
@@ -326,9 +370,9 @@ def build_council_prompt(
         parts.append(fill(REVIEW_TASK, rejections=fill(REVIEW_REJECTIONS) if later else ""))
         parts.append(fill(COUNCIL_LETTERS))
     elif kind == "revise":
-        parts.append(fill(REVISE_INTRO))
+        parts.append(fill(CLOSING_REVISE_INTRO if closing else REVISE_INTRO))
         parts.extend(blocks)
-        parts.append(fill(REVISE_TASK))
+        parts.append(fill(CLOSING_REVISE_TASK if closing else REVISE_TASK))
         parts.append(fill(COUNCIL_LETTERS))
     else:
         raise ValueError(f"unknown council round kind: {kind}")

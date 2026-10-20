@@ -229,9 +229,52 @@ def test_update_prompt_asks_for_the_answer_before_the_responses():
     prompt = build_prompt("update", me="A", other="B", messages=[(1, "comment", "Comments from B.")])
     comments = prompt.index('<comments from="member B" step="2">')
     answer = prompt.index("1. Your full updated answer")
-    responses = prompt.index("2. After the answer, under a heading of its own, your response to member B's objections")
+    responses = prompt.index('2. A line that says exactly "## Responses"')
     assert comments < answer < responses
     assert "You are member A of a council of two" in prompt
+    # The answer stands on its own: the discussion about it goes after the heading.
+    assert "give both views" not in prompt and "Leave the discussion out of it" in prompt
+    assert 'Write about yourself in the first person ("I")' in prompt and "Call yourself" not in prompt
+
+
+def test_comments_stay_on_the_question_and_count_their_suggestions():
+    from fugue.prompts import build_prompt
+
+    prompt = build_prompt("comment", me="A", other="B", messages=[(0, "answer", "B's answer.")])
+    assert "What important point is missing for what the user asked" in prompt
+    assert "a suggestion at most" in prompt and "not how you went about it" in prompt
+    assert prompt.rstrip().endswith("write 0 if you have none.")
+    assert "Objections: <number>\nSuggestions: <number>" in prompt
+    assert engine.parse_suggestions("Points.\n\nObjections: 0\nSuggestions: 3") == 3
+    assert engine.parse_suggestions("Points.\n\nObjections: 0") is None
+
+
+def test_suggestions_without_objections_get_one_closing_version(env, monkeypatch):
+    monkeypatch.setenv("FAKE_OBJECTIONS", "0")
+    monkeypatch.setenv("FAKE_SUGGESTIONS", "2")
+    # Pausing after every step doesn't hold up the closing versions: they end the discussion.
+    assert fugue("start", "Q?", "-q") == 0
+    assert fugue("continue", "-q") == 0
+    discussion = latest()
+    assert kinds(discussion) == ["answer", "comment", "update"]
+    closing = discussion.rounds[2]
+    assert closing.get("closing") and sorted(closing["entries"]) == ["A", "B"]
+    prompt = discussion.prompt_path(2, "A").read_text()
+    assert "Member B has no objections to your answer" in prompt and "This is your final version" in prompt
+    status = engine.describe(discussion)
+    assert status["phase"] == "finished" and status["label"] == "Agreed in step 2"
+
+
+def test_only_members_whose_answers_got_suggestions_write_a_closing_version():
+    rounds = [{"index": 0, "kind": "answer", "entries": {}},
+              {"index": 1, "kind": "comment", "entries": {
+                  "A": {"status": "done", "objections": 0, "suggestions": 2},
+                  "B": {"status": "done", "objections": 0, "suggestions": 0}}}]
+    # A's suggestions are about B's answer, so only B writes a closing version.
+    assert engine.closing_readers(rounds[1]) == ["B"]
+    assert engine.automatic_step(rounds, dict(DEFAULT_CONTROL)) == {"action": "next", "closing": True}
+    rounds[1]["entries"]["A"]["suggestions"] = None  # a comment from before the count was asked for
+    assert engine.automatic_step(rounds, dict(DEFAULT_CONTROL)) is None
 
 
 def test_each_member_keeps_one_letter_for_the_whole_discussion(env, monkeypatch):
@@ -766,6 +809,18 @@ def test_a_council_stops_when_no_reviewer_objects(env, monkeypatch):
     assert fugue("start", "Q?", "--no-pause", "-q", *COUNCIL) == 0
     discussion = latest()
     assert kinds(discussion) == ["answer", "vote", "merge", "review"]
+    assert engine.describe(discussion)["label"] == "Agreed in step 4"
+
+
+def test_a_council_with_suggestions_but_no_objections_closes_with_a_final_version(env, monkeypatch):
+    monkeypatch.setenv("FAKE_OBJECTIONS", "0")
+    monkeypatch.setenv("FAKE_SUGGESTIONS", "1")
+    assert fugue("start", "Q?", "--no-pause", "-q", *COUNCIL) == 0
+    discussion = latest()
+    assert kinds(discussion) == ["answer", "vote", "merge", "review", "revise"]
+    assert discussion.rounds[4].get("closing")
+    editor = list(discussion.rounds[4]["entries"])[0]
+    assert "This is the council's final version" in discussion.prompt_path(4, editor).read_text()
     assert engine.describe(discussion)["label"] == "Agreed in step 4"
 
 

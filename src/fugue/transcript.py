@@ -80,6 +80,8 @@ def resume_command(discussion: Discussion, letter: str, session_id: str) -> str:
 def round_heading(rnd: dict, in_council: bool = False) -> str:
     """A round's heading, as a step: "Step 2: each comments on the other's answer"."""
     number = step_number(rnd["index"])
+    if rnd.get("closing"):
+        return f"Step {number}: the final version, taking in the last suggestions"
     if rnd["kind"] == "answer" and rnd.get("reopen"):
         return f"Step {number}: everyone answers again, for a new vote"
     if rnd["kind"] == "answer" and rnd["index"] > 0:

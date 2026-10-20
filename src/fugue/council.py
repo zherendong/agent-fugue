@@ -17,7 +17,8 @@ every round, so the council works from one shared answer instead:
 5. revise   the writing member revises the answer in light of the reviews;
 
 and reviews and revisions alternate until no reviewer objects or the round
-limit is reached. When the reviews stall (objections not going down for two
+limit is reached. When no reviewer objects but some made suggestions, the
+writing member writes one closing version that takes in the ones it accepts. When the reviews stall (objections not going down for two
 rounds) or most reviewers say the starting point was wrong, every member
 answers again and the council votes again, once per question unless the user
 asks for more.
@@ -44,6 +45,7 @@ STEP_LABELS = {
     "review": "the others review member {editor}'s answer",
     "revise": "member {editor} revises the answer",
     "reopen": "each answers again, for a new vote",
+    "closing": "member {editor} writes the final version, taking in the last suggestions",
 }
 
 
@@ -81,6 +83,11 @@ def agreed(rnd: dict) -> bool:
             and all(e["status"] == "done" and e.get("objections") == 0 for e in rnd["entries"].values()))
 
 
+def closing_reviewed(rnd: dict) -> bool:
+    """A review with no objections in which some reviewer still made suggestions."""
+    return agreed(rnd) and any((entry.get("suggestions") or 0) > 0 for entry in rnd["entries"].values())
+
+
 def wants_new_vote(rounds: list[dict]) -> str | None:
     """Why the council should answer again and vote again, if it should."""
     current = question_rounds(rounds)
@@ -101,10 +108,12 @@ def wants_new_vote(rounds: list[dict]) -> str | None:
 def automatic_kind(rounds: list[dict], control: dict) -> str | None:
     """The next round when nobody asked for one, or None when the council is done."""
     last = rounds[-1]
+    if last.get("closing"):
+        return None
     if last["kind"] != "review":
         return NATURAL_NEXT[last["kind"]]
     if agreed(last):
-        return None
+        return "closing" if closing_reviewed(last) else None
     current = question_rounds(rounds)
     if sum(1 for rnd in current if rnd["kind"] == "revise") >= control["max_rounds"]:
         return None
@@ -213,7 +222,7 @@ def choose_editor(discussion: Discussion, letter: str) -> None:
 
 
 def create_round(discussion: Discussion, kind: str, *, question: str | None = None, reopen: bool = False,
-                 files: list[dict] | None = None) -> dict:
+                 files: list[dict] | None = None, closing: bool = False) -> dict:
     """Add a council round, writing the exact message each participant will receive."""
     rounds = discussion.rounds
     if rounds and not is_complete(rounds[-1]):
@@ -230,6 +239,8 @@ def create_round(discussion: Discussion, kind: str, *, question: str | None = No
             rnd["attachments"] = files
     elif kind != "vote" and editor is None:
         raise FugueError(f"A {kind} round needs a vote first.")
+    if closing:
+        rnd["closing"] = True
 
     planned: dict[str, dict] = {}
     previous = rounds[-1] if rounds else None
@@ -272,6 +283,7 @@ def create_round(discussion: Discussion, kind: str, *, question: str | None = No
         prompt = build_council_prompt(
             kind, me=letter, letters=letters, editor=editor, question=asked,
             followup=kind == "answer" and index > 0 and not reopen, reopen=reopen, later=plan.get("later", False),
+            closing=closing,
             messages=plan["messages"], notes=[(n["text"], n["shared"]) for n in notes])
         discussion.prompt_path(index, letter).write_text(prompt)
         entry = {"status": "pending", "notes": notes,
