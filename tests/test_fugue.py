@@ -742,6 +742,15 @@ def test_a_config_file_from_before_members_still_gives_the_line_up(env):
     assert "[[members]]" in text and "[claude]" not in text and "max_rounds = 3" in text
 
 
+def test_the_status_check_runs_the_tools_from_home(monkeypatch):
+    # Where `fugue web` was started may be gone by now; the tools would then fail and look logged out.
+    from fugue import settings
+    seen = {}
+    monkeypatch.setattr(settings.subprocess, "run", lambda cmd, **kw: seen.setdefault("cwd", kw.get("cwd")))
+    settings._run(["claude", "--version"])
+    assert seen["cwd"] == str(Path.home())
+
+
 def test_status_reports_both_agents_without_calling_a_model(env):
     from fugue.settings import status
 

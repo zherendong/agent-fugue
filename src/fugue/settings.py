@@ -105,7 +105,10 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess | None:
     env.pop("CLAUDECODE", None)
     env.setdefault("TMPDIR", user_temp_dir())
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL, env=env)
+        # From the home folder, so the check doesn't depend on where `fugue web` was started:
+        # if that folder has since been removed, Claude Code and Codex fail and look logged out.
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL, env=env,
+                              cwd=str(Path.home()))
     except (OSError, subprocess.TimeoutExpired):
         return None
 

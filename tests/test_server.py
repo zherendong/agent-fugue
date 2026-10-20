@@ -321,3 +321,10 @@ def test_attachments_from_the_page(server):
     assert data["cwd"] not in folders["recent"]
     status, error = call(server, "POST", "/api/discussions", {"question": "Q?", "attachments": [{"name": "x", "data": "%%%"}]})
     assert status == 400 and "isn't valid base64" in error["error"]
+
+
+def test_new_questions_start_at_home_when_the_starting_folder_is_gone(tmp_path):
+    from fugue.server import App
+    gone = tmp_path / "removed"
+    assert App(0, tmp_path).default_folder() == tmp_path
+    assert App(0, gone).default_folder() == Path.home()

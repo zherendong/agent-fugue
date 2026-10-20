@@ -151,6 +151,10 @@ class App:
         self.threads: list[threading.Thread] = []
         self.hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
+    def default_folder(self) -> Path:
+        """The folder new questions start in: where `fugue web` was started, or home if that folder is gone."""
+        return self.default_cwd if self.default_cwd.is_dir() else Path.home()
+
     def kick(self, discussion_id: str) -> None:
         """Make sure the discussion moves forward: start a runner unless one is already running it."""
         runner = engine.Runner(discussion_id, stop_event=self.stop_event)
@@ -290,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 if discussion.state["cwd"] not in recent:
                     recent.append(discussion.state["cwd"])
-            return self._json({"default": str(self.app.default_cwd), "recent": recent[:15]})
+            return self._json({"default": str(self.app.default_folder()), "recent": recent[:15]})
         if path == "/api/discussions":
             if method == "GET":
                 return self._json([summary(d) for d in reversed(list_discussions())])
@@ -398,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
             raise BadRequest("members must be a list of {tool, model, effort, args}.")
         # An empty folder means none: the members work among the attachments.
         given = body.get("cwd")
-        cwd = None if given == "" else Path(text("cwd") or str(self.app.default_cwd))
+        cwd = None if given == "" else Path(text("cwd") or str(self.app.default_folder()))
         discussion = new_discussion(
             str(body.get("question") or ""),
             cwd=cwd,
