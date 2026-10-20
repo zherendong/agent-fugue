@@ -2,6 +2,10 @@
 
 fugue asks two to four coding agents the same question and has them check each other's answers, step by step, until no one objects or a round limit is reached. The members can be Claude Code, Codex and the DeepSeek Harness, in any mix, each with the model and effort level you choose. You watch the discussion live on a local web page (or in the terminal), add your own view whenever you want, and move it on when you're ready. Like the voices of a fugue, each member first states its own answer, then they answer each other until the lines fit together.
 
+![The fugue page with a finished two-member discussion: the list of discussions on the left, Claude's and Codex's latest answers side by side, and the bar for a follow-up question at the bottom](docs/images/discussion.png)
+
+*The screenshots in this README show invented example discussions.*
+
 ## Why use it
 
 Several agents asked the same question cover more edge cases than any one of them alone. Doing that by hand means copying each reply into the other agents' sessions, in the right order and with the right framing, and keeping track of who has seen what; after a round or two it gets hard to manage. fugue does the shuttling, shows you what each member is doing while it works, and keeps the record.
@@ -56,6 +60,18 @@ A discussion moves in steps, numbered from 1 on the page, in the transcript and 
 
 Comments and updates alternate, so a comment is always about the other's answer as it stands now.
 
+```mermaid
+flowchart TD
+    Q([Your question]) --> A[Step 1: each member answers on its own]
+    A --> C[Each comments on the other's answer]
+    C -->|objections| U[Each updates its own answer]
+    U -->|rounds left| C
+    U -->|round limit| E([Their latest answers])
+    C -->|agreed, with suggestions| F[Closing versions take in the suggestions]
+    C -->|agreed, no suggestions| E
+    F --> E
+```
+
 ### Three or four members: vote, merge, review, revise
 
 Everyone reading and rewriting everyone's answer at every step would cost too much, so a council of three or four works from one shared answer:
@@ -67,9 +83,29 @@ Everyone reading and rewriting everyone's answer at every step would cost too mu
 
 Reviews and revisions alternate, and the last revision is reviewed too, so you see what is still open. When most reviewers say another starting point would have been better, or the objections haven't gone down over the last two reviews, every member answers again and the council votes again; this happens on its own once per question, and **Vote again** on the page (or `fugue revote`) asks for it whenever you like after a vote. Every member votes and every member but the author reviews, so no answer wins by who wrote it.
 
+```mermaid
+flowchart TD
+    Q([Your question]) --> A[Step 1: each member answers on its own]
+    A --> V[Each votes for the best answer to start from]
+    V --> M[Its author merges in the others' best points]
+    M --> R[The others review the shared answer]
+    R -->|objections, rounds left| Rv[The author revises]
+    Rv --> R
+    R -->|wrong start, or stalled| A2[Everyone answers again]
+    A2 --> V
+    R -->|agreed, with suggestions| F[A closing version takes in the suggestions]
+    R -->|agreed, no suggestions| E([The council's answer])
+    R -->|round limit| E
+    F --> E
+```
+
+After the vote, the page shows each answer's points and which one the council starts from; until the merge begins, "Start from this one" picks another:
+
+![A council of three paused after its vote: a board with each answer's points, the chosen starting point and "Start from this one" links, the three ballots below it, a note from you waiting to go out, and the button for the next step](docs/images/vote.png)
+
 ### How it ends
 
-A discussion ends when a comment step (in a council, a review) has no objections, or when the round limit is reached.
+A discussion ends when a comment step (in a council, a review) has no objections, which the page calls agreed, or when the round limit is reached.
 
 - **No objections, but suggestions.** Each member whose answer got suggestions (in a council, the author) writes one closing version that takes in the suggestions it accepts, and lists the others under `## Responses`. The discussion ends there.
 - **The result** is each member's latest answer, or the council's one shared answer. When the round limit ended the discussion, the page also shows the objections from the last comments with each author's responses, or in a council the last reviews that still object.
@@ -144,6 +180,14 @@ A question doesn't need a project folder: without one (`--no-folder`, or **No fo
 - **You**: your notes and follow-up questions appear in the discussion as your own entries, saying when they go out ("note to both, goes out with step 3"; in a council, "goes out with member A's next message"), until they are sent.
 - **At the bottom**, one bar for whatever happens next: write your view for the next step (or pick "Follow-up question"), and press the button that names the next step, such as "Continue: each updates their answer". It takes your note along, and ⌘↩ presses it. While a step runs, the same bar has "Pause after this step" and "Stop".
 - **⋯** (top right) holds the folder, each member's model and effort, the round limit and pausing, the commands to resume each member's session, and Move to Trash.
+
+"Changes since step N" folds away what stayed the same and marks the words that changed:
+
+![Both members' closing versions shown as changes since step 3: unchanged lines folded, and the added words of one changed line highlighted in each](docs/images/changes.png)
+
+"Inspect context" shows what a member was sent, with each part marked by where it came from:
+
+![The context inspector for Claude (member A) in step 3: fugue's message with Codex's forwarded comments highlighted in Codex's colour, followed by fugue's instructions for the update](docs/images/context.png)
 
 A few more things to know:
 
