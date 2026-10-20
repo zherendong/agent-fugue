@@ -289,6 +289,8 @@ scripts/demo-web.sh
 
 The tests run whole discussions, and the web server's API, against fake versions of all three tools in `tests/fakes/`. The fakes mimic the live output of `claude -p --output-format stream-json`, `codex exec --json` and `dsh --profile headless --json`, and log exactly what they were sent. `scripts/demo-web.sh` runs the page against the same fakes (on port 8799, storing discussions in `.demo/`), to try the page without calling any agent.
 
+Each change that users would notice gets a line in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
