@@ -21,10 +21,15 @@ const S = {
   frame: 0,
   refreshTimer: 0,
   follow: false,        // keep the view scrolled to the bottom while it runs
-  activityOpen: new Map(),
-  roundOpen: new Map(), // "discussion:round" -> open or folded, where the user chose
-  menuOpen: false,      // the ⋯ menu in the discussion's bar
+  activityOpen: new Set(), // "round:letter" of replies whose steps are shown
+  historyOpen: new Set(),  // discussions whose earlier rounds are unfolded
+  roundOpen: new Set(),    // "discussion:round" of earlier rounds that are unfolded
+  questionOpen: new Set(), // discussions whose long question is shown in full
+  menuOpen: false,         // the ⋯ panel in the discussion's header
+  layout: viewPrefs().layout === 'single' ? 'single' : 'side',
+  tab: null,               // the member shown when the layout is "one at a time"
   mode: 'both',
+  modeChosen: false,       // whether the user picked where the note box sends
   phases: new Map(),
   info: null,
   loadedAt: Date.now() / 1000,
@@ -127,6 +132,17 @@ function firstLine(text) {
 
 function copy(text) {
   navigator.clipboard.writeText(text).then(() => toast('Copied.'), () => toast('Could not copy.', 'error'));
+}
+
+// How the user likes to read discussions, kept in this browser.
+function viewPrefs(update) {
+  try {
+    const saved = JSON.parse(localStorage.getItem('fugue-view') || '{}');
+    if (update) localStorage.setItem('fugue-view', JSON.stringify({ ...saved, ...update }));
+    return saved;
+  } catch {
+    return {};
+  }
 }
 
 function prefs(update) {
@@ -340,11 +356,22 @@ function drawList() {
   nav.replaceChildren(...S.list.map((d) => el('a', {
     class: `item${d.id === S.id ? ' active' : ''}`,
     href: `#/d/${d.id}`,
-    title: d.title,
+    title: `${d.title}\n${d.status.label} · ${tilde(d.cwd)}`,
   },
-  el('div', { class: 't' }, d.title),
-  el('div', { class: `m phase-${d.status.phase}` }, el('span', { class: 'dot' }), el('span', { class: 'lbl' }, d.status.label)),
-  el('div', { class: 'f' }, `${basename(d.cwd)} · ${ago(d.updated_at)}`))));
+  el('div', { class: 't' },
+    d.status.needs_you || d.status.phase === 'running' ? el('span', { class: `dot phase-${d.status.phase}` }) : null,
+    el('span', {}, d.title)),
+  el('div', { class: 'm' }, `${shortStatus(d)} · ${ago(d.updated_at)}`))));
+}
+
+function shortStatus(d) {
+  switch (d.status.phase) {
+    case 'running': return 'Working';
+    case 'paused':
+    case 'ready': return 'Waiting for you';
+    case 'stopped': return 'Stopped';
+    default: return d.status.label.startsWith('Agreed') ? 'Agreed' : 'Finished';
+  }
 }
 
 function notify(d) {
@@ -408,6 +435,7 @@ function leaveDiscussion() {
   S.detailJson = '';
   S.live = new Map();
   S.menuOpen = false;
+  S.modeChosen = false;
 }
 
 async function openDiscussion(id) {
@@ -529,8 +557,11 @@ async function refreshDetail() {
   S.detail = data;
   S.detailJson = json;
   drawDiscussion();
-  // Following a discussion as it finishes takes you to where it ended.
-  if (before === 'running' && S.follow && hasResult(data)) jumpTo('result');
+  // Following a discussion as it finishes takes you up to its latest answers.
+  if (before === 'running' && S.follow && hasResult(data)) {
+    S.follow = false;
+    $('#main').scrollTop = 0;
+  }
 }
 
 function scrollToBottom() {
@@ -539,52 +570,109 @@ function scrollToBottom() {
 }
 
 // ---------------------------------------------------------------- one discussion
+// The page reads like a document: the question as its title, one line saying
+// where things stand with the one button that moves it on, then the answers.
+// The rest (folder, models, plan, copy commands, delete) is in the ⋯ panel,
+// and the rounds that led to the answers are folded into one line.
 
 function drawDiscussion() {
   const d = S.detail;
   const main = $('#main');
   const scroll = main.scrollTop;
+  const view = mainView(d);
   $('#content').replaceChildren(el('div', { class: 'discussion' },
-    discussionBar(d),
-    infoSection(d),
-    el('section', { class: 'question-card' },
-      el('div', { class: 'section-label' }, 'Question'),
-      el('div', { class: 'md', html: md(d.question) })),
-    resultSection(d),
-    d.rounds.map(roundSection),
-    d.rounds.length ? null : el('p', { class: 'muted' }, 'Starting…')));
+    discussionHead(d),
+    questionBlock(d),
+    d.status.phase === 'stopped' && d.status.detail ? el('div', { class: 'problem' }, d.status.detail) : null,
+    view ? view.node : el('p', { class: 'muted starting' }, 'Starting…'),
+    historySection(d, view ? view.round : null)));
   for (const r of d.rounds) for (const letter of Object.keys(r.entries)) patchCard(r.index, letter);
   drawPending(d);
   drawModes(d);
   $('#composer').hidden = false;
   updateNavCounts();
-  measureBar();
   if (S.follow) scrollToBottom();
   else main.scrollTop = scroll;
-  markActiveChip();
+  markStuck();
 }
 
-// The bar at the top of a discussion, which stays in view while you scroll:
-// title, status, what you can do next, the ⋯ menu, and a strip of rounds to jump to.
-function discussionBar(d) {
-  const status = d.status;
-  let label = status.label;
-  if (status.phase === 'running' && d.control.paused) label += ' · will pause after this round';
-  return el('div', { class: 'dbar' },
-    el('div', { class: 'dbar-top' },
+// What the page shows under the question: the members' latest answers once it
+// has finished, otherwise the round in progress or just done.
+function mainView(d) {
+  if (hasResult(d)) return { node: resultSection(d), round: null };
+  if (!d.rounds.length) return null;
+  const r = d.rounds[d.rounds.length - 1];
+  return { node: currentRoundSection(d, r), round: r.index };
+}
+
+function discussionHead(d) {
+  return el('header', { class: 'dhead' },
+    el('div', { class: 'dhead-title' },
       navToggle(),
-      el('h1', { title: `${d.title}\n(click to go to the top)`, onclick: () => { S.follow = false; $('#main').scrollTop = 0; } }, d.title),
-      el('span', { class: `status phase-${status.phase}` }, el('span', { class: 'dot' }), label),
-      el('span', { class: 'actions' }, actions(d)),
-      moreMenu(d)),
-    roundStrip(d));
+      el('h1', { title: d.title }, d.title),
+      detailsPanel(d)),
+    el('div', { class: 'dhead-status' },
+      el('span', { class: `status phase-${d.status.phase}` }, el('span', { class: 'dot' }), statusText(d)),
+      el('span', { class: 'actions' }, actions(d))));
 }
 
-function moreMenu(d) {
+// The header gets a hairline under it once the page scrolls under it.
+function markStuck() {
+  const head = $('.dhead');
+  if (head) head.classList.toggle('stuck', $('#main').scrollTop > 4);
+}
+
+function statusText(d) {
+  const s = d.status;
+  if (s.phase === 'running') {
+    // The round itself is named just below, so this says who is at work.
+    const last = d.rounds[d.rounds.length - 1];
+    const working = last ? letters(d).filter((letter) => last.entries[letter] && last.entries[letter].status === 'running') : [];
+    let text = working.length === 2 ? 'Both members are working'
+      : working.length === 1 ? `Member ${working[0]} is working` : 'Starting';
+    if (d.control.paused) text += ' · will pause after this round';
+    return text;
+  }
+  if (s.phase === 'finished' && !s.label.startsWith('Agreed')) {
+    const open = openObjections(d);
+    if (open) return `${s.label} · ${plural(open, 'objection')} still open`;
+  }
+  return s.label;
+}
+
+// Objections left in the last comment round of the latest question.
+function openObjections(d) {
+  const comments = currentRounds(d).filter((r) => r.kind === 'comment');
+  const last = comments[comments.length - 1];
+  if (!last) return 0;
+  return Object.values(last.entries).reduce((sum, e) => sum + (e.objections || 0), 0);
+}
+
+// The full question, when the title (its first line) doesn't already say it all.
+function questionBlock(d) {
+  const question = d.question.trim();
+  if (question === d.title.trim()) return null;
+  const long = question.length > 240 || question.split('\n').length > 4;
+  const open = S.questionOpen.has(d.id);
+  return el('div', { class: `question${long && !open ? ' clamped' : ''}` },
+    el('div', { class: 'md', html: md(question) }),
+    long ? el('button', {
+      class: 'link',
+      type: 'button',
+      onclick: () => {
+        if (open) S.questionOpen.delete(d.id);
+        else S.questionOpen.add(d.id);
+        drawDiscussion();
+      },
+    }, open ? 'Show less' : 'Show the whole question') : null);
+}
+
+// The ⋯ panel: facts about the discussion, its plan, and the rarely used actions.
+function detailsPanel(d) {
   const running = d.status.phase === 'running';
   const close = () => {
     S.menuOpen = false;
-    menu.open = false;
+    panel.open = false;
   };
   const item = (text, onclick, extra = {}) => el('button', {
     type: 'button',
@@ -593,12 +681,20 @@ function moreMenu(d) {
     title: extra.title,
     onclick: () => { close(); onclick(); },
   }, text);
-  const menu = el('details', { class: 'menu', open: S.menuOpen, ontoggle: () => { S.menuOpen = menu.open; } },
-    el('summary', { class: 'btn ghost small', title: 'More', 'aria-label': 'More actions' }, '⋯'),
-    el('div', { class: 'menu-list' },
+  const fact = (label, ...value) => el('div', { class: 'fact' }, el('dt', {}, label), el('dd', {}, ...value));
+  const panel = el('details', { class: 'menu', open: S.menuOpen, ontoggle: () => { S.menuOpen = panel.open; } },
+    el('summary', { class: 'icon-btn', title: 'Details and actions', 'aria-label': 'Details and actions' }, '⋯'),
+    el('div', { class: 'menu-panel' },
+      el('dl', { class: 'facts' },
+        fact('Folder', el('code', {}, tilde(d.cwd))),
+        letters(d).map((letter) => fact(`Member ${letter}`, el('span', { class: `mdot ${memberClass(d, letter)}` }), memberLine(d, letter))),
+        fact('Web', d.settings.web === false ? 'Off for both members' : 'Both members may use it'),
+        fact('Started', ago(d.created_at))),
+      planControls(d),
+      el('div', { class: 'menu-sep' }),
       item('Copy transcript path', () => copy(d.transcript_path)),
       letters(d).filter((letter) => d.resume[letter]).map((letter) => item(
-        `Copy resume command for ${d.members[letter].name}`, () => copy(d.resume[letter]),
+        `Copy resume command for member ${letter}`, () => copy(d.resume[letter]),
         { title: "Opens this member's session in your terminal, with its memory of this discussion" })),
       item('Copy discussion id', () => copy(d.id)),
       el('div', { class: 'menu-sep' }),
@@ -607,28 +703,15 @@ function moreMenu(d) {
         disabled: running,
         title: running ? 'Stop it first' : 'Move this discussion to the Trash',
       })));
-  return menu;
+  return panel;
 }
 
-// What scrolls away under the bar: where it runs, who the members are, and the plan.
-function infoSection(d) {
-  const status = d.status;
-  // A finished discussion with answers shows its objection counts in "Where it ended".
-  const detail = status.detail && !(status.phase === 'finished' && hasResult(d)) ? status.detail : null;
-  return el('div', { class: 'dinfo' },
-    el('div', { class: 'meta' },
-      el('code', { title: 'Folder the members work in' }, tilde(d.cwd)),
-      letters(d).map((letter) => el('span', { class: `runs-with ${memberClass(d, letter)}` }, runsWith(d, letter))),
-      el('span', {}, d.settings.web === false ? 'no web access' : 'web access for both'),
-      el('span', {}, `started ${ago(d.created_at)}`)),
-    detail ? el('div', { class: `status-detail phase-${status.phase}` }, detail) : null,
-    planControls(d));
-}
-
-// Rounds scrolled to by the strip land just below the bar.
-function measureBar() {
-  const bar = $('.dbar');
-  $('#main').style.setProperty('--bar-h', `${bar ? bar.offsetHeight : 0}px`);
+// "Claude Opus 5.5 · effort high", or "Codex · GPT-6.1-Sol · default effort".
+function memberLine(d, letter) {
+  const m = d.members[letter];
+  const model = m.model ? modelName(m.tool, m.model) : 'default model';
+  const who = model.startsWith(NAMES[m.tool]) ? model : `${NAMES[m.tool]} · ${model}`;
+  return `${who} · ${m.effort ? `effort ${m.effort}` : 'default effort'}`;
 }
 
 // ---------------------------------------------------------------- members
@@ -649,16 +732,14 @@ function otherName(d, letter) {
   return other.short_name === d.members[letter].short_name ? other.name : other.short_name;
 }
 
-// Cards take their tool's colour; when both members use the same tool, the second gets another shade.
+// Members take their tool's colour; when both use the same tool, the second gets another shade.
 function memberClass(d, letter) {
   const tool = d.members[letter].tool;
   return letters(d).find((other) => d.members[other].tool === tool) === letter ? tool : `${tool} alt`;
 }
 
 function runsWith(d, letter) {
-  const m = d.members[letter];
-  const model = m.model ? modelName(m.tool, m.model) : 'default model';
-  return `${NAMES[m.tool]} (member ${letter}): ${model}, ${m.effort ? `effort ${m.effort}` : 'default effort'}`;
+  return `Member ${letter}: ${memberLine(d, letter)}`;
 }
 
 async function deleteDiscussion(d) {
@@ -705,10 +786,10 @@ function actions(d) {
         d.control.paused
           ? button("Don't pause", () => control({ paused: false }), 'ghost')
           : button('Pause after this round', () => control({ paused: true }), 'ghost'),
-        button('Stop now', () => attempt(async () => { await api('POST', path('stop')); refreshSoon(); }), 'danger'),
+        button('Stop', () => attempt(async () => { await api('POST', path('stop')); refreshSoon(); }), 'ghost danger'),
       ];
     case 'stopped':
-      return [button('Retry and continue', () => control({ paused: false }), 'primary')];
+      return [button('Retry', () => control({ paused: false }), 'primary')];
     case 'ready':
     case 'paused':
       // Continuing runs exactly the next round when "pause after each round" is on.
@@ -723,17 +804,14 @@ function actions(d) {
 function planControls(d) {
   const c = d.control;
   const counts = [...new Set([0, 1, 2, 3, 4, 5, 6, 8, 10, c.max_rounds])].sort((a, b) => a - b);
-  const rounds = el('select', { onchange: (e) => control({ max_rounds: Number(e.target.value) }) },
-    counts.map((n) => el('option', { value: n, selected: n === c.max_rounds }, n)));
-  const pause = el('input', {
-    type: 'checkbox',
-    checked: c.pause_after_each_round,
-    onchange: (e) => control({ pause_after_each_round: e.target.checked }),
-  });
   return el('div', { class: 'plan' },
-    el('label', { title: 'Each round: everyone comments on the others\' answers, then everyone updates their own. It stops earlier once nobody has objections.' },
-      'Rounds of comments and updates', rounds),
-    el('label', {}, pause, 'Pause after each round'));
+    el('label', { title: "Each round: both comment on the other's answer, then both update their own. It stops earlier once neither has objections." },
+      'Rounds of comments and updates',
+      el('select', { onchange: (e) => control({ max_rounds: Number(e.target.value) }) },
+        counts.map((n) => el('option', { value: n, selected: n === c.max_rounds }, n)))),
+    el('label', {},
+      el('input', { type: 'checkbox', checked: c.pause_after_each_round, onchange: (e) => control({ pause_after_each_round: e.target.checked }) }),
+      'Pause after each round'));
 }
 
 const ROUND_TITLES = {
@@ -746,67 +824,58 @@ const ROUND_TITLES = {
   final: 'Final answer',
 };
 
-// The same, in a word or two, for the strip of rounds.
-const ROUND_WORDS = {
-  answer: 'answers',
-  comment: 'comments',
-  update: 'updates',
-  review: 'reviews',
-  discuss: 'discussion',
-  final: 'final answers',
-};
-
 const ANSWER_KINDS = new Set(['answer', 'update', 'final']);
 
 function roundTitle(r) {
   return r.kind === 'answer' && r.index > 0 ? 'Follow-up question, independent answers' : ROUND_TITLES[r.kind];
 }
 
-// ---------------------------------------------------------------- folding rounds
-// Earlier rounds fold into one line each. Open by default: the latest round,
-// and while a round runs, the one before it, whose replies the members are
-// working from. A finished discussion shows "Where it ended" instead, with
-// every round folded. What the user opens or folds stays that way.
+// ---------------------------------------------------------------- answers side by side
+// Both members' replies sit side by side by default; "One at a time" shows one
+// member's reply across the full width, with a tab for each member.
 
-function roundIsOpen(d, r) {
-  const key = `${d.id}:${r.index}`;
-  if (S.roundOpen.has(key)) return S.roundOpen.get(key);
-  if (hasResult(d)) return false;
-  const last = d.rounds.length - 1;
-  if (r.index === last) return true;
-  const running = Object.values(d.rounds[last].entries).some((e) => e.status === 'running');
-  return running && r.index === last - 1;
-}
-
-function toggleRound(r) {
-  S.roundOpen.set(`${S.detail.id}:${r.index}`, !roundIsOpen(S.detail, r));
-  S.follow = false;
+function setLayout(layout) {
+  S.layout = layout;
+  viewPrefs({ layout });
   drawDiscussion();
 }
 
-// A member as a folded round's one line names them: the tool, or the letter when both use the same tool.
-function briefName(d, letter) {
-  const tool = d.members[letter].tool;
-  return letters(d).every((other) => d.members[other].tool === tool) ? `member ${letter}` : NAMES[tool];
+function layoutToggle() {
+  return el('span', { class: 'layout-toggle', role: 'group', 'aria-label': 'Layout' },
+    el('button', { type: 'button', class: S.layout === 'side' ? 'on' : '', onclick: () => setLayout('side') }, 'Side by side'),
+    el('button', { type: 'button', class: S.layout === 'single' ? 'on' : '', onclick: () => setLayout('single') }, 'One at a time'));
 }
 
-function roundSection(r) {
-  const d = S.detail;
-  const open = roundIsOpen(d, r);
-  const shown = letters(d).filter((letter) => r.entries[letter]);
-  return el('section', { class: `round${open ? '' : ' folded'}`, id: `round-${r.index}` },
-    el('h2', {},
-      el('button', { type: 'button', class: 'fold', 'aria-expanded': String(open), onclick: () => toggleRound(r) },
-        el('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
-        el('span', { class: 'num' }, `Round ${r.index}`),
-        roundTitle(r)),
-      tally(r),
-      open ? null : el('span', { class: 'brief' },
-        shown.map((letter) => `${briefName(d, letter)} ${stateText(r.entries[letter])}`).join(' · '))),
-    open && r.kind === 'answer' && r.index > 0
-      ? el('div', { class: 'followup' }, el('div', { class: 'section-label' }, 'Your follow-up'), el('div', { class: 'md', html: md(r.question) }))
-      : null,
-    open ? el('div', { class: `pair${shown.length === 1 ? ' single' : ''}` }, shown.map((letter) => card(r, letter))) : null);
+function sectionHead(title, ...extra) {
+  return el('div', { class: 'section-head' }, el('h2', {}, title), ...extra, el('span', { class: 'spacer' }), layoutToggle());
+}
+
+function pairOf(d, shown, make) {
+  if (S.layout !== 'single' || shown.length < 2) {
+    return el('div', { class: `pair${shown.length === 1 ? ' one' : ''}` }, shown.map(make));
+  }
+  const tab = shown.includes(S.tab) ? S.tab : shown[0];
+  return el('div', { class: 'pair one' },
+    el('div', { class: 'tabs', role: 'tablist' }, shown.map((letter) => el('button', {
+      type: 'button',
+      role: 'tab',
+      class: letter === tab ? 'on' : '',
+      'aria-selected': String(letter === tab),
+      onclick: () => { S.tab = letter; drawDiscussion(); },
+    }, el('span', { class: `mdot ${memberClass(d, letter)}` }), d.members[letter].short_name, el('span', { class: 'letter' }, ` · member ${letter}`)))),
+    make(tab));
+}
+
+function followupBlock(question) {
+  return el('div', { class: 'followup' }, el('div', { class: 'label' }, 'Your follow-up'), el('div', { class: 'md', html: md(question) }));
+}
+
+// The round in progress, or just done, of a discussion that hasn't finished.
+function currentRoundSection(d, r) {
+  return el('section', { class: 'answers', id: `round-${r.index}` },
+    sectionHead(`Round ${r.index}: ${roundTitle(r)}`, tally(r)),
+    r.kind === 'answer' && r.index > 0 ? followupBlock(r.question) : null,
+    pairOf(d, letters(d).filter((letter) => r.entries[letter]), (letter) => card(r, letter)));
 }
 
 // ---------------------------------------------------------------- where it ended
@@ -833,144 +902,103 @@ function hasResult(d) {
 }
 
 function resultSection(d) {
-  if (!hasResult(d)) return null;
   const latest = latestAnswers(d);
   const shown = letters(d).filter((letter) => latest[letter]);
-  const comments = currentRounds(d).filter((r) => ['comment', 'review', 'discuss'].includes(r.kind));
-  const last = comments[comments.length - 1];
   const asked = currentRounds(d)[0];
-  return el('section', { class: 'round result', id: 'round-result' },
-    el('h2', {}, 'Where it ended', el('span', { class: 'num' }, d.status.label), last ? tally(last) : null),
-    asked.index > 0
-      ? el('div', { class: 'followup' }, el('div', { class: 'section-label' }, 'Your follow-up'), el('div', { class: 'md', html: md(asked.question) }))
-      : null,
-    el('div', { class: 'result-note muted' },
-      "Each member's latest answer. The rounds that led here are folded below; open one to see how they got here."),
-    el('div', { class: `pair${shown.length === 1 ? ' single' : ''}` }, shown.map((letter) => resultCard(d, letter, latest[letter]))));
+  return el('section', { class: 'answers', id: 'round-result' },
+    sectionHead('Their latest answers'),
+    asked.index > 0 ? followupBlock(asked.question) : null,
+    pairOf(d, shown, (letter) => resultColumn(d, letter, latest[letter])));
 }
 
-function resultCard(d, letter, r) {
+function resultColumn(d, letter, r) {
   const e = r.entries[letter];
-  return el('article', { class: `agent-card ${memberClass(d, letter)} status-done` },
-    el('header', {},
-      el('span', { class: 'agent-name', title: runsWith(d, letter) }, d.members[letter].short_name),
-      el('span', { class: 'member-letter', title: 'The letter the members know each other by' }, `member ${letter}`),
-      el('span', { class: 'sub' }, `latest answer, from round ${r.index}`)),
+  return el('article', { class: `reply-col ${memberClass(d, letter)} status-done` },
+    columnHead(d, letter, `from round ${r.index}`, ''),
     el('div', { class: 'reply md', html: md(e.reply) }),
-    el('footer', {},
-      el('span', { class: 'spacer' }),
-      el('button', { class: 'link', type: 'button', onclick: () => jumpTo(r.index) }, `Go to round ${r.index}`),
-      el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy answer')));
+    el('footer', {}, el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy')));
 }
 
-// ---------------------------------------------------------------- jumping between rounds
+// ---------------------------------------------------------------- how they got here
+// Every other round, folded into one line under a single "How they got here"
+// (or "Earlier rounds") line; each opens to its replies side by side.
 
-function objectionCounts(r) {
+function historySection(d, current) {
+  const rounds = d.rounds.filter((r) => r.index !== current);
+  if (!rounds.length) return null;
+  const open = S.historyOpen.has(d.id);
+  return el('section', { class: `history${open ? ' open' : ''}` },
+    el('button', {
+      type: 'button',
+      class: 'history-toggle',
+      'aria-expanded': String(open),
+      onclick: () => {
+        if (open) S.historyOpen.delete(d.id);
+        else S.historyOpen.add(d.id);
+        S.follow = false;
+        drawDiscussion();
+      },
+    },
+    el('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
+    hasResult(d) ? 'How they got here' : 'Earlier rounds',
+    el('span', { class: 'muted' }, ` · ${plural(rounds.length, 'round')}`)),
+    open ? el('ol', { class: 'rounds' }, rounds.map((r) => historyRound(d, r))) : null);
+}
+
+function historyRound(d, r) {
+  const key = `${d.id}:${r.index}`;
+  const open = S.roundOpen.has(key);
+  const shown = letters(d).filter((letter) => r.entries[letter]);
+  return el('li', { class: `hround${open ? ' open' : ''}`, id: `round-${r.index}` },
+    el('button', {
+      type: 'button',
+      class: 'hround-row',
+      'aria-expanded': String(open),
+      onclick: () => {
+        if (open) S.roundOpen.delete(key);
+        else S.roundOpen.add(key);
+        S.follow = false;
+        drawDiscussion();
+      },
+    },
+    el('span', { class: 'num' }, r.index),
+    el('span', { class: 'title' }, roundTitle(r)),
+    tally(r),
+    el('span', { class: 'spacer' }),
+    el('span', { class: 'brief' }, shown.map((letter) => `${letter} ${stateText(r.entries[letter])}`).join(' · '))),
+    open ? el('div', { class: 'hround-body' },
+      r.kind === 'answer' && r.index > 0 ? followupBlock(r.question) : null,
+      pairOf(d, shown, (letter) => card(r, letter))) : null);
+}
+
+function tally(r) {
   const d = S.detail;
   const done = letters(d).filter((letter) => r.entries[letter] && r.entries[letter].status === 'done');
   if (done.length < 2) return null;
   if (r.kind === 'comment') {
-    if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'counts ok' }, 'agree');
-    return el('span', { class: 'counts' }, done.map((letter) => `${letter} ${r.entries[letter].objections ?? '?'}`).join(' · '));
+    if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'tally ok' }, 'no objections');
+    return el('span', { class: 'tally' },
+      `objections: ${done.map((letter) => `${letter} ${r.entries[letter].objections ?? '?'}`).join(', ')}`);
   }
   if (r.kind === 'review' || r.kind === 'discuss') {
-    return el('span', { class: 'counts' }, done.map((letter) => `${letter} ${r.entries[letter].remaining ?? '?'}`).join(' · '));
+    return el('span', { class: 'tally' },
+      `disagreements left: ${done.map((letter) => `${letter} ${r.entries[letter].remaining ?? '?'}`).join(', ')}`);
   }
   return null;
 }
 
-function roundStrip(d) {
-  if (!d.rounds.length) return null;
-  const chips = [];
-  if (hasResult(d)) {
-    chips.push(el('button', { type: 'button', class: 'round-chip result', dataset: { target: 'round-result' }, onclick: () => jumpTo('result') },
-      'Where it ended'));
-  }
-  for (const r of d.rounds) {
-    const entries = Object.values(r.entries);
-    const running = entries.some((e) => e.status === 'running');
-    const failed = entries.some((e) => e.status === 'failed' && !['stopped', 'interrupted'].includes(e.error));
-    const word = r.kind === 'answer' && r.index > 0 ? 'follow-up' : ROUND_WORDS[r.kind];
-    chips.push(el('button', {
-      type: 'button',
-      class: `round-chip${running ? ' running' : ''}${failed ? ' failed' : ''}`,
-      dataset: { target: `round-${r.index}` },
-      title: `Round ${r.index}: ${roundTitle(r)}`,
-      onclick: () => jumpTo(r.index),
-    }, el('span', { class: 'n' }, r.index), ` ${word}`, objectionCounts(r)));
-  }
-  return el('nav', { class: 'round-strip', 'aria-label': 'Rounds' }, chips);
-}
-
-function jumpTo(index) {
-  const d = S.detail;
-  if (index !== 'result') {
-    const r = d.rounds[index];
-    if (!roundIsOpen(d, r)) {
-      S.roundOpen.set(`${d.id}:${index}`, true);
-      drawDiscussion();
-    }
-  }
-  S.follow = false;
-  const node = document.getElementById(index === 'result' ? 'round-result' : `round-${index}`);
-  if (node) node.scrollIntoView({ block: 'start' });
-}
-
-// Highlights the round at the top of the view in the strip.
-function markActiveChip() {
-  const strip = $('.round-strip');
-  if (!strip) return;
-  const line = $('#main').getBoundingClientRect().top + ($('.dbar') ? $('.dbar').offsetHeight : 0) + 16;
-  let current = null;
-  for (const section of document.querySelectorAll('.discussion > section.round')) {
-    if (section.getBoundingClientRect().top <= line) current = section.id;
-  }
-  for (const chip of strip.querySelectorAll('.round-chip')) {
-    const on = chip.dataset.target === current;
-    if (on && !chip.classList.contains('on')) chip.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    chip.classList.toggle('on', on);
-  }
-}
-
-function tally(r) {
-  const done = letters(S.detail).filter((letter) => r.entries[letter] && r.entries[letter].status === 'done');
-  if (done.length < 2) return null;
-  if (r.kind === 'comment') {
-    if (done.every((letter) => r.entries[letter].objections === 0)) {
-      return el('span', { class: 'tally ok' }, 'No objections on either side: they agree');
-    }
-    return el('span', { class: 'tally' },
-      `Objections: ${done.map((letter) => `member ${letter} ${r.entries[letter].objections ?? '?'}`).join(' · ')}`);
-  }
-  if (r.kind === 'review' || r.kind === 'discuss') {
-    return el('span', { class: 'tally' },
-      `Disagreements left: ${done.map((letter) => `member ${letter} ${r.entries[letter].remaining ?? '?'}`).join(' · ')}`);
-  }
-  return null;
-}
+// ---------------------------------------------------------------- one member's reply
 
 function subtitle(kind, letter, index) {
   const other = otherName(S.detail, letter);
   return {
     answer: index > 0 ? 'its own answer to the follow-up' : 'its own answer',
-    comment: `commenting on ${other}'s answer`,
-    update: 'its updated answer',
+    comment: `on ${other}'s answer`,
+    update: 'updated answer',
     review: `reviewing ${other}'s answer`,
     discuss: `replying to ${other}`,
     final: 'final answer',
   }[kind];
-}
-
-function countBadge(e) {
-  if (e.objections != null) {
-    return el('span', { class: `badge${e.objections === 0 ? ' ok' : ''}` },
-      e.objections === 0 ? 'No objections' : plural(e.objections, 'objection'));
-  }
-  if (e.remaining != null) { // from earlier versions of fugue
-    return el('span', { class: `badge${e.remaining === 0 ? ' ok' : ''}` },
-      e.remaining === 0 ? 'No disagreements left' : `${plural(e.remaining, 'disagreement')} left`);
-  }
-  return null;
 }
 
 function stateText(e) {
@@ -980,61 +1008,66 @@ function stateText(e) {
   return 'waiting';
 }
 
+function columnHead(d, letter, sub, state) {
+  return el('header', { class: 'col-head' },
+    el('span', { class: `mdot ${memberClass(d, letter)}` }),
+    el('span', { class: 'who', title: runsWith(d, letter) }, d.members[letter].short_name),
+    el('span', { class: 'letter' }, `member ${letter}`),
+    sub ? el('span', { class: 'sub' }, sub) : null,
+    el('span', { class: 'state' }, state));
+}
+
 function card(r, letter) {
   const d = S.detail;
   const e = r.entries[letter];
   const key = `${r.index}:${letter}`;
-  const running = e.status === 'running';
-  const open = S.activityOpen.has(key) ? S.activityOpen.get(key) : running;
-  // Remember only what the user opens or closes; a card opens its activity
-  // while the member works and closes it once the reply is in.
-  const activity = el('details', { class: 'activity', open },
-    el('summary', { onclick: () => S.activityOpen.set(key, !activity.open) }, 'Activity'), el('ol'));
-  let body = null;
-  if (running) body = el('div', { class: 'live md' });
+  let body;
+  if (e.status === 'running') body = el('div', { class: 'live md' });
   else if (e.status === 'done') body = el('div', { class: 'reply md', html: md(e.reply) });
   else if (e.status === 'failed') {
     body = el('div', { class: 'error' },
       e.error === 'stopped' || e.error === 'interrupted' ? 'Stopped before it finished.' : `Failed: ${e.error}`);
   } else body = el('div', { class: 'waiting muted' }, 'Waiting to start.');
   return el('article', {
-    class: `agent-card ${memberClass(d, letter)} status-${e.status}`,
+    class: `reply-col ${memberClass(d, letter)} status-${e.status}`,
     id: `card-${r.index}-${letter}`,
     dataset: { round: r.index, member: letter },
   },
-  el('header', {},
-    el('span', { class: 'agent-name', title: runsWith(d, letter) }, d.members[letter].short_name),
-    el('span', { class: 'member-letter', title: 'The letter the members know each other by' }, `member ${letter}`),
-    el('span', { class: 'sub' }, subtitle(r.kind, letter, r.index)),
-    el('span', { class: 'state' }, stateText(e))),
+  columnHead(d, letter, subtitle(r.kind, letter, r.index), stateText(e)),
   e.notes.length
-    ? el('div', { class: 'notes' }, e.notes.map((n) => el('div', { class: 'note' },
-      el('div', { class: 'label' }, n.shared ? 'Your note to both' : `Your note to member ${letter}`),
-      el('div', { class: 'md', html: md(n.text) }))))
+    ? e.notes.map((n) => el('div', { class: 'note' },
+      el('span', { class: 'label' }, n.shared ? 'Your note to both: ' : 'Your note: '), n.text))
     : null,
-  activity,
   body,
   el('footer', {},
-    countBadge(e),
-    el('span', { class: 'spacer' }),
+    el('button', { class: 'link steps-toggle', type: 'button', hidden: true, onclick: () => toggleSteps(key) }),
     el('button', { class: 'link', type: 'button', onclick: () => showPrompt(r.index, letter) }, 'What fugue sent'),
-    e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy reply') : null));
+    e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy') : null),
+  el('ol', { class: 'steps', hidden: !S.activityOpen.has(key) }));
+}
+
+// A reply's steps (files read, commands run) are hidden until asked for.
+function toggleSteps(key) {
+  if (S.activityOpen.has(key)) S.activityOpen.delete(key);
+  else S.activityOpen.add(key);
+  const [round, letter] = key.split(':');
+  const node = document.getElementById(`card-${round}-${letter}`);
+  if (node) node.querySelector('.steps').hidden = !S.activityOpen.has(key);
+  patchCard(round, letter);
 }
 
 function patchCard(round, letter) {
   const node = document.getElementById(`card-${round}-${letter}`);
   if (!node) return;
   const live = S.live.get(`${round}:${letter}`);
-  const running = node.classList.contains('status-running');
   let items = live ? live.activity : [];
-  // The reply is shown in full below, so don't repeat it as the last step.
+  // The reply is shown in full, so don't repeat it as the last step.
   const entry = S.detail && S.detail.rounds[Number(round)] && S.detail.rounds[Number(round)].entries[letter];
   const last = items[items.length - 1];
   if (entry && entry.reply && last && last.kind === 'message' && last.text === firstLine(entry.reply)) {
     items = items.slice(0, -1);
   }
-  const details = node.querySelector('.activity');
-  const ol = details.querySelector('ol');
+  const ol = node.querySelector('.steps');
   let drawn = Number(ol.dataset.count || 0);
   if (drawn > items.length) {
     ol.replaceChildren();
@@ -1044,18 +1077,19 @@ function patchCard(round, letter) {
   for (const item of items.slice(drawn)) ol.append(el('li', { class: `k-${item.kind}`, title: item.text }, item.text));
   ol.dataset.count = items.length;
   if (atBottom) ol.scrollTop = ol.scrollHeight;
-  details.querySelector('summary').textContent = items.length ? `Activity · ${plural(items.length, 'step')}` : 'Activity';
-  details.hidden = !items.length && !running;
+  const toggle = node.querySelector('.steps-toggle');
+  toggle.hidden = !items.length;
+  toggle.textContent = ol.hidden ? `Show ${plural(items.length, 'step')}` : 'Hide steps';
   const liveNode = node.querySelector('.live');
   if (liveNode) {
     if (live && live.text) liveNode.innerHTML = md(live.text);
     else if (live && live.last === 'thinking') {
       // At high effort Claude can think for minutes before it writes or uses a tool.
-      liveNode.innerHTML = `<p class="last-step"><span>Thinking:</span> about ${escapeHtml(fmtTokens(live.thinking))} tokens so far</p>`;
+      liveNode.innerHTML = `<p class="last-step">Thinking · about ${escapeHtml(fmtTokens(live.thinking))} tokens so far</p>`;
     } else {
-      const last = items.length ? items[items.length - 1] : null;
-      liveNode.innerHTML = last
-        ? `<p class="last-step k-${escapeHtml(last.kind)}"><span>Last step:</span> ${escapeHtml(last.text)}</p>`
+      const step = items.length ? items[items.length - 1] : null;
+      liveNode.innerHTML = step
+        ? `<p class="last-step k-${escapeHtml(step.kind)}">${escapeHtml(step.text)}</p>`
         : '<p class="last-step">Starting…</p>';
     }
   }
@@ -1063,12 +1097,12 @@ function patchCard(round, letter) {
 
 function tick() {
   if (!S.detail) return;
-  for (const node of document.querySelectorAll('.agent-card.status-running')) {
+  for (const node of document.querySelectorAll('.reply-col.status-running')) {
     const { round, member } = node.dataset;
     const live = S.live.get(`${round}:${member}`);
     const entry = S.detail.rounds[Number(round)] && S.detail.rounds[Number(round)].entries[member];
     const start = (live && live.started) || parseTime(entry && entry.started_at);
-    if (start) node.querySelector('header .state').textContent = `working ${fmtDuration(Date.now() / 1000 - start)}`;
+    if (start) node.querySelector('.col-head .state').textContent = `working ${fmtDuration(Date.now() / 1000 - start)}`;
   }
 }
 
@@ -1085,13 +1119,13 @@ async function showPrompt(round, letter) {
 
 function modes(d) {
   const all = {
-    both: { label: 'To both members', placeholder: 'Add a note for both members…', hint: 'Goes into the next message to both members.' },
+    both: { label: 'Note to both', placeholder: 'Add a note for the next round', hint: 'Goes into the next message to both members.' },
   };
   for (const letter of letters(d)) {
     const name = d.members[letter].name;
-    all[letter] = { label: `To ${name}`, placeholder: `A note only ${name} will see…`, hint: `Goes into the next message to ${name} only.` };
+    all[letter] = { label: `Note to member ${letter}`, placeholder: `A note only ${name} will see`, hint: `Goes into the next message to ${name} only.` };
   }
-  all.ask = { label: 'Follow-up question', placeholder: 'Ask a follow-up question…', hint: 'Asked once the current round is done. Each member answers on its own first.' };
+  all.ask = { label: 'Follow-up question', placeholder: 'Ask a follow-up question', hint: 'Asked once the current round is done. Each member answers on its own first.' };
   return all;
 }
 
@@ -1103,7 +1137,9 @@ function drawModes(d) {
     select.dataset.modes = wanted;
     select.replaceChildren(...Object.entries(all).map(([mode, m]) => el('option', { value: mode }, m.label)));
   }
-  setMode(all[S.mode] ? S.mode : 'both');
+  // Until you pick, a finished discussion takes a follow-up question and any other a note to both.
+  const fallback = d.status.phase === 'finished' ? 'ask' : 'both';
+  setMode(S.modeChosen && all[S.mode] ? S.mode : fallback);
 }
 
 function setMode(mode) {
@@ -1122,7 +1158,6 @@ function sizeComposer() {
   box.classList.toggle('open', open);
   text.style.height = '';
   if (open) text.style.height = `${Math.min(Math.max(text.scrollHeight, 66), window.innerHeight * 0.4)}px`;
-  measureBar();
 }
 
 async function send() {
@@ -1142,34 +1177,26 @@ async function send() {
   refreshSoon();
 }
 
+// Notes and requests waiting for the next round, one quiet line each.
 function drawPending(d) {
-  const chips = [];
+  const lines = [];
   const seen = new Set();
+  const line = (text, onremove, title) => el('div', { class: 'pending-line', title },
+    el('span', { class: 'text' }, text),
+    el('button', { type: 'button', class: 'link', onclick: () => attempt(async () => { await onremove(); refreshSoon(); }) }, 'Remove'));
   for (const letter of letters(d)) {
     (d.inbox.notes[letter] || []).forEach((note, index) => {
       if (note.shared && seen.has(note.text)) return;
       if (note.shared) seen.add(note.text);
-      chips.push(el('span', { class: 'chip', title: note.text },
-        el('span', { class: 'text' }, `${note.shared ? 'Note to both' : `Note to member ${letter}`}: ${note.text}`),
-        el('button', {
-          type: 'button',
-          title: 'Withdraw this note',
-          onclick: () => attempt(async () => { await api('DELETE', path('notes'), { member: letter, index }); refreshSoon(); }),
-        }, '×')));
+      lines.push(line(`${note.shared ? 'Note to both' : `Note to member ${letter}`}: ${note.text}`,
+        () => api('DELETE', path('notes'), { member: letter, index }), note.text));
     });
   }
-  const describe = (r) => (r.type === 'ask' ? `Follow-up: ${r.question}`
-    : 'One more round');
   for (const r of d.inbox.requests) {
-    chips.push(el('span', { class: 'chip', title: describe(r) },
-      el('span', { class: 'text' }, `Queued: ${describe(r)}`),
-      el('button', {
-        type: 'button',
-        title: 'Cancel',
-        onclick: () => attempt(async () => { await api('DELETE', path('requests', r.id)); refreshSoon(); }),
-      }, '×')));
+    const text = r.type === 'ask' ? `Follow-up queued: ${r.question}` : 'One more round queued';
+    lines.push(line(text, () => api('DELETE', path('requests', r.id)), text));
   }
-  $('#pending').replaceChildren(...chips);
+  $('#pending').replaceChildren(...lines);
 }
 
 // ---------------------------------------------------------------- model pickers
@@ -1348,50 +1375,64 @@ async function showNewQuestion() {
   // Everything but the folder starts from the defaults on the Settings page,
   // including the members, so what the form shows is what runs.
   const rounds = defaults ? defaults.max_rounds : 2;
+  const pause = defaults ? defaults.pause_after_each_round : true;
+  const web = defaults ? defaults.web : true;
+  const lineup = (defaults ? defaults.members : [{ tool: 'claude' }, { tool: 'codex' }])
+    .map((m) => (m.model ? `${TOOL_LABELS[m.tool]} (${m.model})` : TOOL_LABELS[m.tool])).join(' and ');
   const membersSlot = el('div', {}, el('span', { class: 'muted' }, 'Loading the model lists…'));
 
-  const form = el('form', { class: 'form', onsubmit: (e) => { e.preventDefault(); start(form); } },
-    el('h1', {}, navToggle(), 'New question'),
-    missing.length
-      ? el('div', { class: 'warning' }, `The server can't find the ${missing.join(' and ')} command on its PATH, so members can't use it.`)
-      : null,
-    el('div', { class: 'field' },
-      el('label', { for: 'q' }, 'Question'),
-      el('textarea', {
-        id: 'q',
-        name: 'question',
-        rows: 9,
-        required: true,
-        placeholder: 'Both members get exactly this, and each answers on its own first.',
-        onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
-      })),
-    el('div', { class: 'field' },
-      el('label', { for: 'cwd' }, 'Folder the members work in'),
-      el('input', { id: 'cwd', name: 'cwd', type: 'text', list: 'folders', value: cwdDefault, required: true, spellcheck: 'false' }),
-      el('datalist', { id: 'folders' }, [...new Set([...folders.recent, folders.default])].map((f) => el('option', { value: f }))),
-      el('div', { class: 'hint' }, 'They can read everything in it and run read-only commands, but not change files.')),
+  // Who answers and how it runs start from Settings and stay folded into one line until you change them.
+  const options = el('div', { class: 'more-options', hidden: true },
     el('div', { class: 'field' },
       el('div', { class: 'label' }, 'How it runs'),
       el('div', { class: 'options' },
         el('label', {}, 'Rounds of comments and updates',
           el('select', { name: 'max_rounds' }, [0, 1, 2, 3, 4, 5, 6, 8, 10].map((n) => el('option', { value: n, selected: n === rounds }, n)))),
-        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: defaults ? defaults.pause_after_each_round : true }), 'Pause after each round'),
+        el('label', {}, el('input', { type: 'checkbox', name: 'pause', checked: pause }), 'Pause after each round'),
         el('label', { title: "Both or neither. Claude: web search and fetching pages (not from this Mac's own servers). Codex: its web search." },
-          el('input', { type: 'checkbox', name: 'web', checked: defaults ? defaults.web : true }), 'Members may use the web')),
+          el('input', { type: 'checkbox', name: 'web', checked: web }), 'Members may use the web'),
+        el('label', {}, 'Give up on a member after',
+          el('input', { type: 'text', name: 'timeout', class: 'short', placeholder: String(defaults ? defaults.timeout_minutes : 30) }), 'minutes')),
       el('div', { class: 'hint' },
         "After the answers, each round has two steps: each comments on the other's answer, then each updates their own. "
-        + 'It stops earlier once neither has objections. With pausing on, you move it on yourself after every round. '
-        + 'You can change all of this while it runs.')),
+        + 'It stops earlier once neither has objections.')),
     el('div', { class: 'field' },
       el('div', { class: 'label' }, 'Members'),
-      membersSlot),
-    el('details', {},
-      el('summary', {}, 'Time limit'),
-      el('div', { class: 'grid' },
-        el('label', {}, 'Give up on a member after (minutes)',
-          el('input', { type: 'text', name: 'timeout', placeholder: String(defaults ? defaults.timeout_minutes : 30) })))),
+      membersSlot));
+  const summary = el('span', {},
+    `${lineup} · ${plural(rounds, 'round')} of comments and updates · ${pause ? 'pauses after each round' : 'runs to the end'} · ${web ? 'web on' : 'no web'}`);
+  const change = el('button', {
+    class: 'link',
+    type: 'button',
+    onclick: () => {
+      options.hidden = !options.hidden;
+      summary.hidden = !options.hidden;
+      change.textContent = options.hidden ? 'Change' : 'Hide options';
+    },
+  }, 'Change');
+
+  const form = el('form', { class: 'form new-question', onsubmit: (e) => { e.preventDefault(); start(form); } },
+    el('h1', {}, navToggle(), 'New question'),
+    missing.length
+      ? el('div', { class: 'warning' }, `The server can't find the ${missing.join(' and ')} command on its PATH, so members can't use it.`)
+      : null,
+    el('textarea', {
+      id: 'q',
+      name: 'question',
+      rows: 8,
+      required: true,
+      'aria-label': 'Question',
+      placeholder: 'What should both members answer? Each answers on its own first.',
+      onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
+    }),
+    el('div', { class: 'folder-row' },
+      el('label', { for: 'cwd' }, 'In'),
+      el('input', { id: 'cwd', name: 'cwd', type: 'text', list: 'folders', value: cwdDefault, required: true, spellcheck: 'false', title: 'The members can read everything in this folder and run read-only commands, but not change files.' }),
+      el('datalist', { id: 'folders' }, [...new Set([...folders.recent, folders.default])].map((f) => el('option', { value: f })))),
+    el('div', { class: 'setup-summary' }, summary, change),
+    options,
     el('div', { class: 'submit' },
-      el('button', { class: 'btn primary', type: 'submit' }, 'Ask both'),
+      el('button', { class: 'btn primary', type: 'submit' }, 'Ask'),
       el('span', { class: 'muted' }, '⌘↩')));
   $('#content').replaceChildren(form);
   updateNavCounts();
@@ -1511,7 +1552,10 @@ async function drawStatus(box) {
 
 function init() {
   $('#composer-send').addEventListener('click', send);
-  $('#composer-mode').addEventListener('change', (e) => setMode(e.target.value));
+  $('#composer-mode').addEventListener('change', (e) => {
+    S.modeChosen = true;
+    setMode(e.target.value);
+  });
   const text = $('#composer-text');
   text.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -1534,11 +1578,10 @@ function init() {
     S.menuOpen = false;
     for (const menu of document.querySelectorAll('details.menu[open]')) menu.open = false;
   });
-  window.addEventListener('resize', measureBar);
   $('#main').addEventListener('scroll', () => {
     const main = $('#main');
     S.follow = main.scrollTop + main.clientHeight >= main.scrollHeight - 80;
-    markActiveChip();
+    markStuck();
   }, { passive: true });
   window.addEventListener('hashchange', route);
   setUpNotifications();
