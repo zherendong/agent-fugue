@@ -31,6 +31,7 @@ const S = {
   mode: 'both',
   modeChosen: false,       // whether the user picked where the note box sends
   phases: new Map(),
+  drafts: new Map(),       // discussion id -> files and where the box was sending, while you are elsewhere
   info: null,
   loadedAt: Date.now() / 1000,
 };
@@ -58,14 +59,36 @@ function el(tag, props, ...children) {
 }
 
 async function api(method, path, body) {
-  const response = await fetch(path, {
-    method,
-    headers: { 'X-Fugue-Token': TOKEN, 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method,
+      headers: { 'X-Fugue-Token': TOKEN, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    connection('down');
+    throw new Error("Can't reach fugue.");
+  }
+  // A restarted server has a new token, which only a reloaded page knows.
+  connection(response.status === 401 ? 'restarted' : null);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
   return data;
+}
+
+// When the server stops or restarts, the page says so instead of quietly going stale.
+function connection(problem) {
+  const banner = $('#banner');
+  if (banner.dataset.problem === (problem || '')) return;
+  banner.dataset.problem = problem || '';
+  banner.hidden = !problem;
+  if (problem === 'restarted') {
+    banner.replaceChildren(el('span', {}, 'fugue was restarted, so this page lost touch with it.'),
+      el('button', { class: 'btn small primary', type: 'button', onclick: () => location.reload() }, 'Reload'));
+  } else if (problem === 'down') {
+    banner.replaceChildren(el('span', {}, "Can't reach fugue. If it stopped, start it again with ", el('code', {}, 'fugue web'), '.'));
+  }
 }
 
 function toast(text, kind = 'info') {
@@ -421,7 +444,45 @@ function route() {
   else location.hash = `#/d/${S.list[0].id}`;
 }
 
+// What you typed in the bar belongs to the discussion it was typed in: it
+// waits there while you look at another one, and survives reloading the page.
+function draftKey(id) {
+  return `fugue-draft:${id}`;
+}
+
+function storeDraftText() {
+  if (!S.id) return;
+  try {
+    const text = $('#composer-text').value;
+    if (text.trim()) sessionStorage.setItem(draftKey(S.id), text);
+    else sessionStorage.removeItem(draftKey(S.id));
+  } catch { /* the draft just isn't kept */ }
+}
+
+function saveDraft() {
+  if (!S.id) return;
+  storeDraftText();
+  if (S.picker.files.length || S.modeChosen) S.drafts.set(S.id, { files: [...S.picker.files], mode: S.modeChosen ? S.mode : null });
+  else S.drafts.delete(S.id);
+  $('#composer-text').value = '';
+  S.picker.set([]);
+}
+
+function restoreDraft(id) {
+  let text = '';
+  try { text = sessionStorage.getItem(draftKey(id)) || ''; } catch { /* nothing kept */ }
+  const draft = S.drafts.get(id);
+  $('#composer-text').value = text;
+  S.picker.set(draft ? draft.files : []);
+  if (draft && draft.mode) {
+    S.mode = draft.mode;
+    S.modeChosen = true;
+  }
+  sizeComposer();
+}
+
 function leaveDiscussion() {
+  saveDraft();
   if (S.source) S.source.close();
   S.source = null;
   S.id = null;
@@ -436,6 +497,7 @@ async function openDiscussion(id) {
   if (S.id !== id) {
     leaveDiscussion();
     S.id = id;
+    restoreDraft(id);
     S.follow = false;
     $('#content').replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
     drawList();
@@ -633,6 +695,7 @@ function filePicker({ target, onadd } = {}) {
   node.files = files;
   node.open = () => input.click();
   node.clear = () => { files.length = 0; draw(); };
+  node.set = (list) => { files.splice(0, files.length, ...list); draw(); };
   node.encode = async () => {
     const total = files.reduce((sum, file) => sum + file.size, 0);
     if (total > MAX_ATTACH_BYTES) throw new Error('The attachments come to more than 50 MB.');
@@ -1471,6 +1534,7 @@ async function submitText() {
   });
   if (!ok) return false;
   $('#composer-text').value = '';
+  storeDraftText();
   if (S.mode === 'ask') S.picker.clear();
   sizeComposer();
   return true;
@@ -2072,7 +2136,7 @@ function init() {
       if (S.primary) S.primary.click();
     }
   });
-  text.addEventListener('input', sizeComposer);
+  text.addEventListener('input', () => { sizeComposer(); storeDraftText(); });
   // Wait for focus to settle, so moving between the box's own controls keeps it open.
   $('.composer-box').addEventListener('focusin', () => setTimeout(sizeComposer));
   $('.composer-box').addEventListener('focusout', () => setTimeout(sizeComposer));
