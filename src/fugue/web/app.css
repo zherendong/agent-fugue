@@ -562,6 +562,7 @@ button.link:hover { color: var(--text); }
 
 .new-question .folder-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--muted); }
 .new-question .folder-row input { flex: 1; }
+.new-question .intro { margin: -6px 0 16px; max-width: 640px; color: var(--muted); }
 .setup-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-top: 12px; font-size: 13px; color: var(--muted); }
 .setup-summary .link { font-size: 13px; color: var(--accent); }
 .more-options { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }

@@ -2038,27 +2038,39 @@ async function showNewQuestion() {
     placeholder: 'No folder: the members see only the question and its attachments',
     title: 'The members can read everything in this folder and run read-only commands, but not change files.',
   });
+  const noFolder = el('button', {
+    type: 'button',
+    class: 'link',
+    title: 'Ask without a project folder',
+    hidden: !cwdInput.value,
+    onclick: () => { cwdInput.value = ''; noFolder.hidden = true; cwdInput.focus(); },
+  }, 'No folder');
+  cwdInput.addEventListener('input', () => { noFolder.hidden = !cwdInput.value; });
   const question = el('textarea', {
     id: 'q',
     name: 'question',
     rows: 8,
     required: true,
     'aria-label': 'Question',
-    placeholder: 'What should the members answer? Each answers on its own first. Drop or paste files here to attach them.',
+    placeholder: 'Your question for the members. Drop or paste files here to attach them.',
     onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
   });
   const picker = filePicker({ target: question });
   const form = el('form', { class: 'form new-question', onsubmit: (e) => { e.preventDefault(); start(form); } },
     el('h1', {}, navToggle(), 'New question'),
+    // Said once, to someone who hasn't asked anything yet.
+    S.list.length ? null : el('p', { class: 'intro' },
+      'Two to four coding agents answer your question on their own, then check each other\'s answers until they '
+      + 'agree or reach the round limit. You can read along, add your view between rounds and ask follow-ups.'),
     question,
     el('div', { class: 'attach-row' },
       el('button', { type: 'button', class: 'link accent', onclick: () => picker.open() }, 'Attach files'),
       el('span', { class: 'muted' }, 'PDF, Word, images or text, up to 50 MB'),
       picker),
     el('div', { class: 'folder-row' },
-      el('label', { for: 'cwd' }, 'In'),
+      el('label', { for: 'cwd', title: cwdInput.title }, 'Folder'),
       cwdInput,
-      el('button', { type: 'button', class: 'link', title: 'Ask without a project folder', onclick: () => { cwdInput.value = ''; cwdInput.focus(); } }, 'No folder'),
+      noFolder,
       el('datalist', { id: 'folders' }, [...new Set([...folders.recent, folders.default])].map((f) => el('option', { value: f })))),
     el('div', { class: 'setup-summary' }, summary, change),
     options,
