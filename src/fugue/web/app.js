@@ -1736,11 +1736,14 @@ function drawBar(d) {
   $('#composer-actions').replaceChildren(...barActions(d));
 }
 
-// The note box is one line until you click into it or it has text.
+// The note box is one line until you click into its text or it has text. Once
+// open, it stays open while you move between its own controls; a button such
+// as Attach doesn't open it.
 function sizeComposer() {
   const box = $('.composer-box');
   const text = $('#composer-text');
-  const open = box.contains(document.activeElement) || text.value.trim() !== '';
+  const open = text.value.trim() !== '' || document.activeElement === text
+    || (box.classList.contains('open') && box.contains(document.activeElement));
   box.classList.toggle('open', open);
   text.style.height = '';
   if (open) text.style.height = `${Math.min(Math.max(text.scrollHeight, 66), window.innerHeight * 0.4)}px`;
