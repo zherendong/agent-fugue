@@ -430,7 +430,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
             return 1
     discussion.move_to_trash()
     err(f"Moved {discussion.id} to the Trash. The members' own sessions are kept, so "
-        "`claude --resume` and `codex resume` still find them.")
+        "`claude --resume`, `codex resume` and `dsh --session-id` still find them.")
     return 0
 
 
@@ -496,8 +496,8 @@ def cmd_service(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fugue",
-        description="Ask two agents (Claude Code, Codex, or two of either) the same question, "
-                    "then let them review each other.",
+        description="Ask two to four coding agents (Claude Code, Codex and the DeepSeek Harness, in any mix) "
+                    "the same question, then let them check each other's answers.",
     )
     parser.add_argument("--version", action="version", version=f"fugue {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -527,20 +527,24 @@ def build_parser() -> argparse.ArgumentParser:
     actions.add_parser("restart", help="restart it, for example after changing fugue's code")
     p.set_defaults(func=cmd_service)
 
-    p = sub.add_parser("start", parents=[quiet], help="ask both members a new question",
-                       description="Ask both members a new question. Each answers on its own; then rounds of "
-                                   "comments (each comments on the other's answer) and updates (each rewrites "
-                                   "its answer in light of the comments) alternate, until neither has "
-                                   "objections or the round limit is reached. It pauses after every step "
-                                   "until you run `fugue continue`, unless you pass --no-pause.")
+    p = sub.add_parser("start", parents=[quiet], help="ask the members a new question",
+                       description="Ask the members a new question. Each answers on its own. Two members then "
+                                   "alternate comments (each comments on the other's answer) and updates (each "
+                                   "rewrites its answer in light of the comments); three or four vote for the "
+                                   "best answer to start from, its author merges in the others' points, and the "
+                                   "others review it while the author revises. It goes on until no one objects "
+                                   "or the round limit is reached. It pauses after every step (a council after "
+                                   "its vote and each revision) until you run `fugue continue`, unless you pass "
+                                   "--no-pause.")
     p.add_argument("question", nargs="?",
                    help="the question; use - to read it from stdin, or leave it out to write it in $EDITOR")
     p.add_argument("-f", "--file", help="read the question from this file")
     p.add_argument("-n", "--rounds", type=int,
-                   help="most rounds of comments and updates after the answers (default: 2 of each)")
+                   help="most rounds after the answers: of comments and updates, or in a council of reviews "
+                        "and revisions (default: 2)")
     p.add_argument("--no-pause", action="store_true", help="run every step without waiting for you")
     p.add_argument("--no-web", action="store_true",
-                   help="don't let either member use the web (on by default for both)")
+                   help="don't let any member use the web (on by default for every member)")
     p.add_argument("--title", help="short name for the discussion (default: the question's first line)")
     p.add_argument("--cwd", help="folder the members work in (default: the current folder)")
     p.add_argument("--no-folder", action="store_true",
@@ -555,8 +559,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "starting point, which its author merges and the others review. Without --member, your "
                         "saved line-up is used (Settings on the page).")
     p.add_argument("--member-args", action="append", metavar="ARGS",
-                   help='extra arguments for the matching --member (`claude -p` or `codex exec`), in the same '
-                        'order, e.g. --member-args="--add-dir ../shared"')
+                   help='extra arguments for the matching --member (`claude -p`, `codex exec` or '
+                        '`dsh --profile headless`), in the same order, e.g. --member-args="--add-dir ../shared"')
     p.add_argument("--timeout", type=float, metavar="MINUTES",
                    help=f"give up on an agent after this long (default: {DEFAULT_TIMEOUT_MINUTES})")
     p.set_defaults(func=cmd_start)
@@ -568,9 +572,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run one more round, even after they agreed or reached the limit")
     p.set_defaults(func=cmd_next)
 
-    p = sub.add_parser("ask", parents=[which, quiet], help="ask both members a follow-up question",
+    p = sub.add_parser("ask", parents=[which, quiet], help="ask the members a follow-up question",
                        description="Ask a follow-up question in the same discussion. Each member answers on "
-                                   "its own first, then comment and update rounds follow as before.")
+                                   "its own first; then the discussion goes on as before: comments and updates "
+                                   "with two members, or a vote, a merge and reviews in a council.")
     p.add_argument("question", nargs="?", help="the question; - for stdin, or leave it out to use $EDITOR")
     p.add_argument("-f", "--file", help="read the question from this file")
     p.add_argument("--attach", action="append", metavar="FILE", help="attach a file to the follow-up (repeat for more)")
@@ -580,8 +585,8 @@ def build_parser() -> argparse.ArgumentParser:
                        description="Save a note from you. fugue adds it to the next message it sends.")
     p.add_argument("text", nargs="?", help="the note; use - for stdin, or leave it out to use $EDITOR")
     p.add_argument("-f", "--file", help="read the note from this file")
-    p.add_argument("--to", default="both", metavar="both|A|B",
-                   help="who gets the note: both, or one member's letter (default: both)")
+    p.add_argument("--to", default="both", metavar="both|LETTER",
+                   help="who gets the note: both (every member), or one member's letter, A to D (default: both)")
     p.set_defaults(func=cmd_note)
 
     p = sub.add_parser("revote", parents=[which, quiet],
@@ -601,13 +606,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("show", parents=[which], help="print the replies from one step")
     p.add_argument("step", nargs="?", type=int, help="step number, from 1 (default: the last one)")
-    p.add_argument("--member", metavar="A|B", help="only this member's reply")
+    p.add_argument("--member", metavar="LETTER", help="only this member's reply (its letter, A to D)")
     p.add_argument("--prompt", action="store_true", help="show exactly what fugue sent instead of the reply")
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("models", help="list the models and effort levels you can choose for each tool",
                        description="Codex's list comes from `codex debug models` (fugue keeps a copy for a "
-                                   "day); Claude's is built into fugue, since Claude Code has no such command.")
+                                   "day); Claude's and DeepSeek's are built into fugue, since Claude Code and the "
+                                   "DeepSeek Harness have no such command.")
     p.add_argument("--refresh", action="store_true", help="ask Codex again instead of using fugue's copy")
     p.set_defaults(func=cmd_models)
 
@@ -616,8 +622,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("delete", help="move a discussion to the Trash",
-                       description="Move a discussion's folder to the Trash, where Finder can restore it. "
-                                   "The members' own Claude and Codex sessions are kept.")
+                       description="Move a discussion's folder to the Trash, where Finder can restore it "
+                                   "(without the `trash` command, to fugue's own trash folder). The members' "
+                                   "own sessions in Claude Code, Codex or the DeepSeek Harness are kept.")
     p.add_argument("id", help="the discussion's id, or a unique start of it (see `fugue list`)")
     p.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
     p.set_defaults(func=cmd_delete)

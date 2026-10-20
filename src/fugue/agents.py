@@ -17,9 +17,9 @@ from pathlib import Path
 from .store import FugueError
 from .streams import ClaudeStream, CodexStream, DshStream, Outcome
 
-# Both agents run read-only: they can read files and run commands, but not
-# change files. Two agents editing the same checkout in parallel would trip
-# over each other.
+# Every member runs read-only: it can read files and run commands, but not
+# change files. Several agents editing the same checkout in parallel would
+# trip over each other.
 CODEX_READ_ONLY = ["-c", 'sandbox_mode="read-only"']
 CREDENTIAL_DIRS = ["~/.ssh", "~/.aws"]
 

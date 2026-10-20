@@ -5,9 +5,10 @@ Only the process running a discussion writes its state and its event log.
 Anyone (the command line, the web page) may add notes and requests to its
 inbox or change its controls; the running process picks them up.
 
-A discussion's members are known by letter ("A", "B"), drawn at random when
-it starts. Each member is a tool (Claude Code or Codex) with its own model,
-effort and extra arguments; two members may use the same tool and model.
+A discussion's two to four members are known by letter ("A" to "D"), drawn at
+random when it starts. Each member is a tool (Claude Code, Codex or the
+DeepSeek Harness) with its own model, effort and extra arguments; members may
+use the same tool and model.
 """
 
 from __future__ import annotations
@@ -275,7 +276,7 @@ class Discussion:
     def move_to_trash(self) -> None:
         """Move this discussion's folder to the Trash, where it can be restored from Finder.
 
-        Claude's and Codex's own sessions are left alone. $FUGUE_TRASH names a folder
+        The members' own sessions in their tools are left alone. $FUGUE_TRASH names a folder
         to move it to instead (the tests use it); without the macOS `trash`
         command, it goes to the fugue folder's own trash/.
         """

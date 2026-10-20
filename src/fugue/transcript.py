@@ -150,6 +150,7 @@ def render(discussion: Discussion) -> str:
     lines += attachment_lines(state.get("attachments"))
 
     in_council = len(discussion.members) > 2
+    everyone = "every member" if in_council else "both members"
     for rnd in discussion.rounds:
         lines += ["---", "", f"## {round_heading(rnd, in_council)}", ""]
         if rnd["kind"] == "answer" and rnd["index"] > 0 and not rnd.get("reopen"):
@@ -163,7 +164,7 @@ def render(discussion: Discussion) -> str:
                 continue
             lines += [f"### {entry_heading(rnd['kind'], discussion, letter)}", ""]
             for note in entry.get("notes", []):
-                target = "both members" if note["shared"] else f"member {letter}"
+                target = everyone if note["shared"] else f"member {letter}"
                 lines += [f"Your note to {target}:", "", _quote(note["text"]), ""]
             if entry["status"] == "done":
                 lines += [demote_headings(discussion.read_reply(rnd["index"], letter).strip()), ""]
@@ -184,7 +185,7 @@ def render(discussion: Discussion) -> str:
                     if note["text"] in shown_shared:
                         continue
                     shown_shared.add(note["text"])
-                target = "both members" if note["shared"] else f"member {letter}"
+                target = everyone if note["shared"] else f"member {letter}"
                 lines += [f"To {target}:", "", _quote(note["text"]), ""]
     return "\n".join(lines).rstrip() + "\n"
 

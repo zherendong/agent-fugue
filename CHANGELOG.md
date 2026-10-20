@@ -4,6 +4,7 @@ This file records the changes to fugue that someone using it would notice, newes
 
 ## 2026-10-20
 
+- The command-line help, `fugue delete`'s message and the transcript's note labels describe two to four members and all three tools, instead of two members and only Claude Code and Codex.
 - Comments, reviews and votes check any rewrite of your own material (an attached file, text in the question, a file in the folder) line by line against the source, and a claim stronger than the source counts as an objection.
 - Members check their own changed claims against the source before they hand in an update, merge, revision or closing version.
 - When the round limit ends a discussion with objections, a section under the latest answers shows the last objections: with two members, next to each author's response; in a council, the reviews that still object.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the web page against the fake agents in tests/fakes, to try it out
-# without calling Claude or Codex. Its discussions go to .demo/ in this folder.
+# without calling Claude Code, Codex or the DeepSeek Harness. Its discussions
+# go to .demo/ in this folder.
 # FAKE_SLEEP sets how many seconds each fake agent takes (default 4).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
