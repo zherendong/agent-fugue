@@ -1802,12 +1802,16 @@ function defaultModelLabel(tool) {
 function defaultEffortLabel(tool, modelId) {
   const entry = S.models && S.models[tool];
   const own = entry && entry.defaults.effort;
-  if (tool === 'codex' || tool === 'dsh') {
-    if (own) return `Default: ${own}, from your ${NAMES[tool]} config`;
-    const model = findModel(tool, modelId || (entry && entry.defaults.model));
-    return model && model.default_effort ? `Default: ${model.default_effort}` : 'Default';
-  }
-  return own ? `Default: ${own}, from your Claude Code settings` : "Default: Claude Code's own";
+  if (own) return `Default: ${own}`;
+  const model = tool !== 'claude' && findModel(tool, modelId || (entry && entry.defaults.model));
+  return model && model.default_effort ? `Default: ${model.default_effort}` : 'Default';
+}
+
+// Where a tool's own default effort comes from, for the effort menu's tooltip.
+function effortSource(tool) {
+  const own = S.models && S.models[tool] && S.models[tool].defaults.effort;
+  if (!own) return `Default: fugue passes no effort, so ${TOOL_LABELS[tool]} uses its own.`;
+  return `Default: ${own}, from your ${tool === 'claude' ? 'Claude Code settings' : `${NAMES[tool]} config`}.`;
 }
 
 function allLevels(models) {
@@ -1839,9 +1843,16 @@ function memberRow(index, chosen, onchange, onremove = null) {
   row.addEventListener('change', onchange);
   row.addEventListener('input', onchange);
   drawPicker(chosen);
+  const argsLink = el('button', {
+    type: 'button',
+    class: 'link args-link',
+    onclick: () => { args.hidden = false; argsLink.hidden = true; args.focus(); },
+  }, 'Extra arguments');
+  args.hidden = !args.value;
+  argsLink.hidden = !args.hidden;
   row.append(
     el('span', { class: 'member-num' }, `Member ${index + 1}`),
-    el('div', { class: 'member-body' }, tool, picker, args, missing),
+    el('div', { class: 'member-body' }, tool, picker, argsLink, args, missing),
     onremove ? el('button', { type: 'button', class: 'link remove', title: 'Remove this member', onclick: onremove }, 'Remove') : '');
   row.read = () => {
     const modelChoice = row.querySelector('select.model');
@@ -1870,7 +1881,7 @@ function modelPicker(tool, chosen) {
     spellcheck: 'false',
     hidden: listed,
   });
-  const effortSelect = el('select', { class: 'effort', 'aria-label': `${NAMES[tool]} effort` });
+  const effortSelect = el('select', { class: 'effort', 'aria-label': `${NAMES[tool]} effort`, title: effortSource(tool) });
   let wanted = chosen.effort || '';
   const fill = () => {
     other.hidden = modelSelect.value !== '__other';
@@ -1936,10 +1947,8 @@ function membersField(chosen, onchange = null) {
     const codex = S.models.codex;
     const when = codex.checked_at ? ` on ${new Date(codex.checked_at * 1000).toLocaleString()}` : '';
     hint.replaceChildren(
-      'Each member is Claude Code, Codex or the DeepSeek Harness (which uses a DeepSeek API key); members can use the '
-      + 'same tool. They know each other only by letter, drawn at random when the discussion starts. '
-      + `Default means fugue passes nothing, so the tool uses its own settings. Codex's models come from ${codex.source}${when}; `
-      + "Claude's and DeepSeek's lists are built into fugue. ",
+      'Members can use the same tool. They know each other only by a letter, drawn at random for each discussion. '
+      + `Default means fugue passes nothing, so the tool uses its own setting. Codex's models come from ${codex.source}${when}.`,
       el('button', {
         class: 'link',
         type: 'button',
