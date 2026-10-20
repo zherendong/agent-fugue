@@ -52,6 +52,27 @@ def summary(discussion: Discussion) -> dict:
     }
 
 
+def conversation(discussion: Discussion, letter: str, upto: int) -> list[dict]:
+    """Everything fugue sent one member up to a round, with the member's replies in between.
+
+    Each member keeps one session for the whole discussion, so this is the
+    conversation it had seen when it answered round `upto`, as far as fugue
+    knows: not its tool's own system prompt or project instructions, and not
+    the files it read along the way.
+    """
+    items = []
+    for rnd in discussion.rounds[: upto + 1]:
+        entry = rnd["entries"].get(letter)
+        prompt = discussion.prompt_path(rnd["index"], letter)
+        if entry is None or not prompt.exists():
+            continue
+        items.append({"round": rnd["index"], "kind": rnd["kind"], "role": "sent", "text": prompt.read_text()})
+        if rnd["index"] < upto and entry["status"] == "done":
+            items.append({"round": rnd["index"], "kind": rnd["kind"], "role": "reply",
+                          "text": discussion.read_reply(rnd["index"], letter)})
+    return items
+
+
 def detail(discussion: Discussion) -> dict:
     rounds = []
     for rnd in discussion.rounds:
@@ -259,6 +280,11 @@ class Handler(BaseHTTPRequestHandler):
             if letter not in discussion.members or not discussion.prompt_path(index, letter).exists():
                 return self._error(HTTPStatus.NOT_FOUND, "No such message.")
             return self._json({"text": discussion.prompt_path(index, letter).read_text()})
+        if action == "context" and method == "GET":
+            index, letter = int((query.get("round") or ["-1"])[0]), (query.get("member") or [""])[0]
+            if letter not in discussion.members or not discussion.prompt_path(index, letter).exists():
+                return self._error(HTTPStatus.NOT_FOUND, "No such message.")
+            return self._json({"items": conversation(discussion, letter, index)})
         if action == "notes" and method == "POST":
             body = self._body()
             text, to = str(body.get("text") or "").strip(), body.get("to", "both")

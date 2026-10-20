@@ -112,6 +112,13 @@ def test_create_and_run_a_discussion(server, monkeypatch):
     _, prompt = call(server, "GET", f"/api/discussions/{ident}/prompt?round=1&member={claude}")
     assert "Codex reply number 1." in prompt["text"]
     assert call(server, "GET", f"/api/discussions/{ident}/prompt?round=1&member=claude")[0] == 404
+    # Everything Claude had seen when it answered round 1: the question, its own answer, then round 1's message.
+    _, context = call(server, "GET", f"/api/discussions/{ident}/context?round=1&member={claude}")
+    assert [(i["round"], i["role"]) for i in context["items"]] == [(0, "sent"), (0, "reply"), (1, "sent")]
+    assert context["items"][0]["text"].strip() == "Should we cache?"
+    assert context["items"][1]["text"].startswith("Claude reply number 1.")
+    assert context["items"][2]["text"] == prompt["text"]
+    assert call(server, "GET", f"/api/discussions/{ident}/context?round=7&member={claude}")[0] == 404
     _, folders = call(server, "GET", "/api/folders")
     assert folders["recent"][0] == str(server["work"].resolve())
 

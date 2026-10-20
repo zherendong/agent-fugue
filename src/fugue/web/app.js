@@ -883,7 +883,9 @@ function resultColumn(d, letter, r) {
   return el('article', { class: `reply-col ${memberClass(d, letter)} status-done` },
     columnHead(d, letter, `from round ${r.index}`, ''),
     el('div', { class: 'reply md', html: md(e.reply) }),
-    el('footer', {}, el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy')));
+    el('footer', {},
+      el('button', { class: 'link', type: 'button', onclick: () => showContext(r.index, letter) }, 'Inspect context'),
+      el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy')));
 }
 
 // ---------------------------------------------------------------- how they got here
@@ -1006,7 +1008,7 @@ function card(r, letter) {
   body,
   el('footer', {},
     el('button', { class: 'link steps-toggle', type: 'button', hidden: true, onclick: () => toggleSteps(key) }),
-    el('button', { class: 'link', type: 'button', onclick: () => showPrompt(r.index, letter) }, 'What fugue sent'),
+    el('button', { class: 'link', type: 'button', onclick: () => showContext(r.index, letter) }, 'Inspect context'),
     e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy') : null),
   el('ol', { class: 'steps', hidden: !S.activityOpen.has(key) }));
 }
@@ -1071,13 +1073,112 @@ function tick() {
   }
 }
 
-async function showPrompt(round, letter) {
-  const data = await attempt(() => api('GET', `${path('prompt')}?round=${round}&member=${letter}`));
+// ---------------------------------------------------------------- what a member saw
+// Each member keeps one session for the whole discussion, so what it saw when
+// it answered a round is every message fugue sent it up to that round, with
+// its own replies in between. The inspector shows that conversation with each
+// part marked by where it came from: you, fugue's instructions, the other
+// member, or the member itself.
+
+async function showContext(round, letter) {
+  const data = await attempt(() => api('GET', `${path('context')}?round=${round}&member=${letter}`));
   if (!data) return;
-  $('#prompt-title').textContent = `What fugue sent to ${S.detail.members[letter].name} in round ${round}`;
-  $('#prompt-text').textContent = data.text;
-  $('#prompt-copy').onclick = () => copy(data.text);
-  $('#prompt-dialog').showModal();
+  S.context = { round, letter, items: data.items, tab: 'round' };
+  drawContext();
+  $('#context-dialog').showModal();
+}
+
+function drawContext() {
+  const d = S.detail;
+  const { round, letter, items, tab } = S.context;
+  const other = otherLetter(d, letter);
+  const shown = tab === 'round' ? items.filter((i) => i.round === round && i.role === 'sent') : items;
+  const tabButton = (name, label) => el('button', {
+    type: 'button',
+    role: 'tab',
+    class: tab === name ? 'on' : '',
+    'aria-selected': String(tab === name),
+    onclick: () => { S.context.tab = name; drawContext(); },
+  }, label);
+  const legend = (cls, label) => el('span', {}, el('span', { class: `swatch ${cls}` }), label);
+  const dialog = $('#context-dialog');
+  dialog.replaceChildren(
+    el('div', { class: 'dialog-head' },
+      el('h2', {}, `What ${d.members[letter].name} saw in round ${round}`),
+      el('button', { type: 'button', class: 'btn small', onclick: () => copy(shown.map((i) => i.text).join('\n\n')) }, 'Copy'),
+      el('button', { type: 'button', class: 'btn ghost small', onclick: () => dialog.close() }, 'Close')),
+    el('div', { class: 'context-bar' },
+      el('div', { class: 'tabs', role: 'tablist' },
+        tabButton('round', "This round's message"),
+        tabButton('all', `Whole conversation up to round ${round}`)),
+      el('div', { class: 'legend' },
+        legend('src-you', 'You'),
+        legend('src-fugue', "fugue's instructions"),
+        legend(`src-m ${memberClass(d, other)}`, `Member ${other}`),
+        legend(`src-m ${memberClass(d, letter)}`, `Member ${letter}'s own replies`))),
+    el('div', { class: 'context-body' }, shown.map((item) => contextItem(d, letter, item))),
+    el('div', { class: 'context-foot' },
+      "What fugue sent this member and what it replied, in order. Not included: its tool's own system prompt, "
+      + 'CLAUDE.md or AGENTS.md, and the files it read (see its steps).'));
+}
+
+function contextItem(d, letter, item) {
+  if (item.role === 'reply') {
+    return contextBlock(`src-m ${memberClass(d, letter)}`, `Round ${item.round} · member ${letter} replied`, item.text);
+  }
+  if (item.kind === 'answer' && item.round === 0) {
+    // The first message is your question, sent exactly as you wrote it.
+    return contextBlock('src-you', `Round ${item.round} · your question, sent as you wrote it`, item.text);
+  }
+  return el('div', { class: 'ctx-msg' },
+    el('div', { class: 'ctx-label' }, `Round ${item.round} · message from fugue`),
+    contextSegments(d, item.text, letter));
+}
+
+// fugue wraps what it forwards in tags, so a message splits into its sources.
+// Discussions from before letters wrote from="the other member".
+const FORWARDED = /<([a-z]+) from="([^"]*)" round="(\d+)">\n?([\s\S]*?)\n?<\/\1>|<question>\n?([\s\S]*?)\n?<\/question>|<user_note>\n?([\s\S]*?)\n?<\/user_note>/g;
+
+function contextSegments(d, text, letter) {
+  const out = [];
+  const plain = (part) => (part.trim() ? el('div', { class: 'ctx-plain' }, part.trim()) : null);
+  let last = 0;
+  for (const m of text.matchAll(FORWARDED)) {
+    out.push(plain(text.slice(last, m.index)));
+    if (m[1]) {
+      const named = m[2].match(/member ([A-Z])/);
+      const sender = named && d.members[named[1]] ? named[1] : otherLetter(d, letter);
+      out.push(contextBlock(`src-m ${memberClass(d, sender)}`, `Member ${sender}'s ${m[1]}, round ${m[3]}`, m[4]));
+    } else if (m[5] !== undefined) {
+      out.push(contextBlock('src-you', 'Your follow-up question', m[5]));
+    } else {
+      out.push(contextBlock('src-you', 'Your note', m[6]));
+    }
+    last = m.index + m[0].length;
+  }
+  out.push(plain(text.slice(last)));
+  return out;
+}
+
+// Long parts start folded to a few lines.
+function contextBlock(cls, label, text) {
+  const body = text.trim();
+  const long = body.length > 1200 || body.split('\n').length > 16;
+  const node = el('div', { class: `ctx-block ${cls}${long ? ' clamped' : ''}` },
+    el('div', { class: 'ctx-label' }, label),
+    el('div', { class: 'ctx-text' }, body));
+  if (long) {
+    const more = el('button', {
+      type: 'button',
+      class: 'link',
+      onclick: () => {
+        node.classList.toggle('clamped');
+        more.textContent = node.classList.contains('clamped') ? 'Show all' : 'Show less';
+      },
+    }, 'Show all');
+    node.append(more);
+  }
+  return node;
 }
 
 // ---------------------------------------------------------------- notes, follow-ups, queue
@@ -1676,7 +1777,6 @@ function init() {
   // Wait for focus to settle, so moving between the box's own controls keeps it open.
   $('.composer-box').addEventListener('focusin', () => setTimeout(sizeComposer));
   $('.composer-box').addEventListener('focusout', () => setTimeout(sizeComposer));
-  $('#prompt-close').addEventListener('click', () => $('#prompt-dialog').close());
   $('#nav-backdrop').addEventListener('click', () => setNav(false));
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') setNav(false);
