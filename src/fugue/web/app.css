@@ -201,7 +201,6 @@ button.link:hover { color: var(--text); }
 }
 .dhead-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-top: 6px; }
 .status { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; flex: 1; min-width: 0; }
-.dhead .actions { display: flex; gap: 6px; }
 
 .question { margin: 14px 0 0; max-width: 820px; color: var(--muted); font-size: 14px; }
 .question.clamped .md { max-height: 6.4em; overflow: hidden; mask-image: linear-gradient(to bottom, #000 60%, transparent); }
@@ -472,7 +471,9 @@ button.link:hover { color: var(--text); }
   padding: 6px 6px 6px 8px;
 }
 .composer-box:focus-within { border-color: var(--faint); }
-.composer-box.open { align-items: start; }
+.composer-box.open { align-items: end; }
+.bar-actions { display: flex; align-items: center; gap: 4px; }
+.bar-actions .btn.primary { margin-left: 4px; }
 #composer-mode {
   max-width: 190px;
   border: none;

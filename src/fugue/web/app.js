@@ -602,8 +602,7 @@ function discussionHead(d) {
       el('h1', { title: d.title }, d.title),
       detailsPanel(d)),
     el('div', { class: 'dhead-status' },
-      el('span', { class: `status phase-${d.status.phase}` }, el('span', { class: 'dot' }), statusText(d)),
-      el('span', { class: 'actions' }, actions(d))));
+      el('span', { class: `status phase-${d.status.phase}` }, el('span', { class: 'dot' }), statusText(d))));
 }
 
 // The header gets a hairline under it once the page scrolls under it.
@@ -767,29 +766,6 @@ const request = (body) => attempt(async () => {
   follow();
   refreshSoon();
 });
-
-function actions(d) {
-  const next = d.status.next;
-  switch (d.status.phase) {
-    case 'running':
-      return [
-        d.control.paused
-          ? button("Don't pause", () => control({ paused: false }), 'ghost')
-          : button('Pause after this round', () => control({ paused: true }), 'ghost'),
-        button('Stop', () => attempt(async () => { await api('POST', path('stop')); refreshSoon(); }), 'ghost danger'),
-      ];
-    case 'stopped':
-      return [button('Retry', () => control({ paused: false }), 'primary')];
-    case 'ready':
-    case 'paused':
-      // Continuing runs exactly the next round when "pause after each round" is on.
-      return [button(next ? `Next: ${next}` : 'Continue', () => control({ paused: false }), 'primary')];
-    case 'finished':
-      return [button('One more round', () => request({ type: 'next' }))];
-    default:
-      return [];
-  }
-}
 
 function planControls(d) {
   const c = d.control;
@@ -1107,15 +1083,15 @@ async function showPrompt(round, letter) {
 
 // ---------------------------------------------------------------- notes, follow-ups, queue
 
+// ---------------------------------------------------------------- the action bar
+// Everything you can do next is in one bar at the bottom: a box for your
+// note or follow-up question, and the button that says what happens next.
+// A note goes out with the next round, so "Continue" takes it along.
+
 function modes(d) {
-  const all = {
-    both: { label: 'Note to both', placeholder: 'Add a note for the next round', hint: 'Goes into the next message to both members.' },
-  };
-  for (const letter of letters(d)) {
-    const name = d.members[letter].name;
-    all[letter] = { label: `Note to member ${letter}`, placeholder: `A note only ${name} will see`, hint: `Goes into the next message to ${name} only.` };
-  }
-  all.ask = { label: 'Follow-up question', placeholder: 'Ask a follow-up question', hint: 'Asked once the current round is done. Each member answers on its own first.' };
+  const all = { both: { label: 'To both' } };
+  for (const letter of letters(d)) all[letter] = { label: `To member ${letter}`, name: d.members[letter].name };
+  all.ask = { label: 'Follow-up question' };
   return all;
 }
 
@@ -1125,7 +1101,7 @@ function drawModes(d) {
   const wanted = JSON.stringify(Object.entries(all).map(([mode, m]) => [mode, m.label]));
   if (select.dataset.modes !== wanted) {
     select.dataset.modes = wanted;
-    select.replaceChildren(...Object.entries(all).map(([mode, m]) => el('option', { value: mode }, m.label)));
+    select.replaceChildren(...Object.entries(all).map(([mode, m]) => el('option', { value: mode, title: m.name }, m.label)));
   }
   // Until you pick, a finished discussion takes a follow-up question and any other a note to both.
   const fallback = d.status.phase === 'finished' ? 'ask' : 'both';
@@ -1133,11 +1109,99 @@ function drawModes(d) {
 }
 
 function setMode(mode) {
-  const m = modes(S.detail)[mode];
+  const d = S.detail;
+  const m = modes(d)[mode];
+  const phase = d.status.phase;
   S.mode = mode;
   $('#composer-mode').value = mode;
-  $('#composer-text').placeholder = m.placeholder;
-  $('#composer-hint').textContent = `${m.hint} ⌘↩ sends.`;
+  let placeholder;
+  let hint;
+  if (mode === 'ask') {
+    placeholder = 'Ask a follow-up question';
+    hint = phase === 'running' ? "It's asked once this round is done; each member answers on its own first."
+      : 'Each member answers it on its own first.';
+  } else {
+    const who = mode === 'both' ? 'both members' : m.name;
+    placeholder = phase === 'finished' ? `Add a note to ${who} for one more round`
+      : phase === 'running' ? `Add a note to ${who} for the next round`
+        : `Add your view for the next round, to ${who} (optional)`;
+    hint = `It goes into the next message fugue sends to ${who}.`;
+  }
+  $('#composer-text').placeholder = placeholder;
+  drawBar(d);
+  $('#composer-hint').textContent = `${hint} ⌘↩ presses “${S.primary ? S.primary.textContent : ''}”.`;
+}
+
+function textValue() {
+  return $('#composer-text').value.trim();
+}
+
+// Saves what is in the box as a note or a follow-up question. False if that failed.
+async function submitText() {
+  const text = textValue();
+  if (!text) return true;
+  const ok = await attempt(async () => {
+    if (S.mode === 'ask') await api('POST', path('requests'), { type: 'ask', question: text });
+    else await api('POST', path('notes'), { text, to: S.mode });
+    return true;
+  });
+  if (!ok) return false;
+  $('#composer-text').value = '';
+  sizeComposer();
+  return true;
+}
+
+// For the buttons that only make sense with something written.
+function needText(what) {
+  if (textValue()) return true;
+  $('#composer-text').focus();
+  $('#composer-hint').textContent = `Write ${what} first.`;
+  return false;
+}
+
+function barActions(d) {
+  const ask = S.mode === 'ask';
+  const next = d.status.next;
+  const withText = (then) => async () => {
+    if (await submitText()) await then();
+  };
+  const askButton = button('Ask', async () => {
+    if (needText('the question') && await submitText()) {
+      follow();
+      refreshSoon();
+    }
+  }, 'primary');
+  const items = [];
+  let primary;
+  switch (d.status.phase) {
+    case 'running':
+      items.push(button(d.control.paused ? "Don't pause" : 'Pause after this round', () => control({ paused: !d.control.paused }), 'ghost'));
+      items.push(button('Stop', () => attempt(async () => { await api('POST', path('stop')); refreshSoon(); }), 'ghost danger'));
+      primary = button(ask ? 'Queue the question' : 'Save note', async () => {
+        if (needText(ask ? 'the question' : 'the note') && await submitText()) refreshSoon();
+      });
+      break;
+    case 'finished':
+      if (ask) {
+        items.push(button('One more round', () => request({ type: 'next' }), 'ghost'));
+        primary = askButton;
+      } else {
+        primary = button('One more round', withText(() => request({ type: 'next' })), 'primary');
+      }
+      break;
+    case 'stopped':
+      primary = ask ? askButton : button('Retry', withText(() => control({ paused: false })), 'primary');
+      break;
+    default: // waiting for you: paused or ready
+      primary = ask ? askButton
+        : button(next ? `Continue: ${next}` : 'Continue', withText(() => control({ paused: false })), 'primary');
+  }
+  S.primary = primary;
+  return [...items, primary];
+}
+
+function drawBar(d) {
+  $('#composer-actions').replaceChildren(...barActions(d));
 }
 
 // The note box is one line until you click into it or it has text.
@@ -1148,23 +1212,6 @@ function sizeComposer() {
   box.classList.toggle('open', open);
   text.style.height = '';
   if (open) text.style.height = `${Math.min(Math.max(text.scrollHeight, 66), window.innerHeight * 0.4)}px`;
-}
-
-async function send() {
-  const box = $('#composer-text');
-  const text = box.value.trim();
-  if (!text || !S.id) return;
-  const ok = await attempt(async () => {
-    if (S.mode === 'ask') await api('POST', path('requests'), { type: 'ask', question: text });
-    else await api('POST', path('notes'), { text, to: S.mode });
-    return true;
-  });
-  if (!ok) return;
-  box.value = '';
-  sizeComposer();
-  if (S.mode === 'ask') follow();
-  toast(S.mode === 'ask' ? 'Follow-up question queued.' : 'Note saved for the next round.');
-  refreshSoon();
 }
 
 // Notes and requests waiting for the next round, one quiet line each.
@@ -1558,7 +1605,6 @@ async function drawStatus(box) {
 // ---------------------------------------------------------------- start up
 
 function init() {
-  $('#composer-send').addEventListener('click', send);
   $('#composer-mode').addEventListener('change', (e) => {
     S.modeChosen = true;
     setMode(e.target.value);
@@ -1567,7 +1613,7 @@ function init() {
   text.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      send();
+      if (S.primary) S.primary.click();
     }
   });
   text.addEventListener('input', sizeComposer);
