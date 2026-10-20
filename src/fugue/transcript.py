@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from pathlib import Path
 
 from .agents import format_duration
 from .store import Discussion
@@ -97,6 +98,16 @@ def vote_summary(rnd: dict) -> str:
             f"({vote['valid']} of {len(rnd['entries'])} ballots counted).")
 
 
+def attachment_lines(records: list[dict] | None) -> list[str]:
+    if not records:
+        return []
+    lines = ["Attached:", ""]
+    for record in records:
+        extra = " (and its text: " + Path(record["text"]).name + ")" if record.get("text") else ""
+        lines.append(f"- `{record['path']}`{extra}")
+    return lines + [""]
+
+
 def _quote(text: str) -> str:
     return "\n".join(f"> {line}" if line else ">" for line in text.strip().splitlines())
 
@@ -118,12 +129,14 @@ def render(discussion: Discussion) -> str:
             lines.append(f"- {discussion.name(letter)}: `{resume_command(discussion, letter, session_id)}`")
         lines.append("")
     lines += ["## Question", "", state["question"].strip(), ""]
+    lines += attachment_lines(state.get("attachments"))
 
     in_council = len(discussion.members) > 2
     for rnd in discussion.rounds:
         lines += ["---", "", f"## {round_heading(rnd, in_council)}", ""]
         if rnd["kind"] == "answer" and rnd["index"] > 0 and not rnd.get("reopen"):
             lines += [_quote(rnd["question"]), ""]
+            lines += attachment_lines(rnd.get("attachments"))
         if rnd.get("vote"):
             lines += [vote_summary(rnd), ""]
         for letter in discussion.members:

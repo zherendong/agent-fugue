@@ -143,8 +143,8 @@ class Discussion:
     # -- creating and loading
 
     @classmethod
-    def create(cls, *, question: str, title: str, cwd: Path, members: list[dict], settings: dict,
-               control: dict) -> "Discussion":
+    def create(cls, *, question: str, title: str, cwd: Path | None, members: list[dict], settings: dict,
+               control: dict, attachments: list[tuple[str, bytes]] = ()) -> "Discussion":
         root = discussions_dir()
         stamp = time.strftime("%Y%m%d-%H%M%S")
         slug = _slug(title)
@@ -155,13 +155,16 @@ class Discussion:
         path = root / ident
         (path / "rounds").mkdir(parents=True)
         (path / "logs").mkdir()
+        (path / "attachments").mkdir()
         letters = assign_letters(len(members))
         state = {
             "version": 3,
             "id": ident,
             "title": title,
             "question": question,
-            "cwd": str(cwd),
+            # Without a folder of their own, the members work among the attachments.
+            "cwd": str(cwd or path / "attachments"),
+            "no_folder": cwd is None,
             "created_at": now_iso(),
             "updated_at": now_iso(),
             "members": dict(sorted(zip(letters, members))),
@@ -170,6 +173,10 @@ class Discussion:
             "rounds": [],
         }
         discussion = cls(path, state)
+        if attachments:
+            from .attachments import save_all
+
+            state["attachments"] = save_all(discussion.attachments_dir, list(attachments))
         discussion.save()
         _write_json(path / "control.json", {**DEFAULT_CONTROL, **control})
         return discussion
@@ -223,6 +230,16 @@ class Discussion:
 
     def name(self, letter: str, with_letter: bool = True) -> str:
         return member_name(self.members, letter, with_letter)
+
+    @property
+    def attachments_dir(self) -> Path:
+        return self.path / "attachments"
+
+    def attach(self, files: list[tuple[str, bytes]]) -> list[dict]:
+        """Keep files attached to a follow-up question."""
+        from .attachments import save_all
+
+        return save_all(self.attachments_dir, files)
 
     @property
     def transcript_path(self) -> Path:

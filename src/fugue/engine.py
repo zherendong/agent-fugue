@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Callable
 
-from . import council, transcript
+from . import attachments, council, transcript
 from .agents import DSH_ENV, AgentCall, claude_command, codex_command, dsh_command, dsh_overlay, find_binary
 from .prompts import build_prompt, join_letters
 from .store import TOOL_NAMES, Discussion, FugueError, now_iso
@@ -64,8 +64,12 @@ def agreed(rnd: dict) -> bool:
     )
 
 
-def create_round(discussion: Discussion, kind: str, participants: list[str], question: str | None = None) -> dict:
-    """Add a round, writing the exact message each participant will receive."""
+def create_round(discussion: Discussion, kind: str, participants: list[str], question: str | None = None,
+                 files: list[dict] | None = None) -> dict:
+    """Add a round, writing the exact message each participant will receive.
+
+    `files` are the attachments that come with the question of an answer round.
+    """
     if discussion.rounds and not is_complete(discussion.rounds[-1]):
         raise FugueError("The last round hasn't finished. Continue the discussion to retry it first.")
     index = len(discussion.rounds)
@@ -73,6 +77,8 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
     rnd: dict = {"index": index, "kind": kind, "created_at": now_iso(), "entries": {}}
     if kind == "answer":
         rnd["question"] = question
+        if files:
+            rnd["attachments"] = files
 
     planned = {}
     for agent in participants:
@@ -88,8 +94,12 @@ def create_round(discussion: Discussion, kind: str, participants: list[str], que
         sender = discussion.other(agent)
         messages = [(i, discussion.rounds[i]["kind"], discussion.read_reply(i, sender)) for i in forwarded]
         notes = discussion.take_notes(agent)
+        asked = question
+        if kind == "answer" and question is not None:
+            asked = attachments.with_attachments(question, files,
+                                                 images_attached=discussion.members[agent]["tool"] == "codex")
         prompt = build_prompt(kind, me=agent, other=sender,
-                              question=question, followup=followup, messages=messages,
+                              question=asked, followup=followup, messages=messages,
                               notes=[(n["text"], n["shared"]) for n in notes])
         discussion.prompt_path(index, agent).write_text(prompt)
         rnd["entries"][agent] = {"status": "pending", "forwarded": forwarded, "notes": notes}
@@ -146,7 +156,8 @@ def _make_call(discussion: Discussion, rnd: dict, letter: str) -> AgentCall:
         reply_file.unlink(missing_ok=True)
         cmd = codex_command(find_binary("codex"), session_id=session_id, model=member.get("model"),
                             extra_args=member.get("args", []), reply_file=reply_file,
-                            effort=member.get("effort"), web=web)
+                            effort=member.get("effort"), web=web,
+                            images=attachments.images(rnd.get("attachments")) if rnd["kind"] == "answer" else [])
         stream = CodexStream(reply_file)
     return AgentCall(letter, cmd, cwd=discussion.cwd, prompt_file=discussion.prompt_path(rnd["index"], letter),
                      log_stem=stem, timeout_s=settings["timeout_minutes"] * 60, stream=stream, env=env)
@@ -478,9 +489,11 @@ class Runner:
         if action == "retry":
             rnd = discussion.rounds[-1]
         elif action == "answer":
-            rnd = create_round(discussion, "answer", list(discussion.members), question=step["question"])
+            rnd = create_round(discussion, "answer", list(discussion.members), question=step["question"],
+                               files=discussion.state.get("attachments"))
         elif action == "ask":
-            rnd = create_round(discussion, "answer", list(discussion.members), question=step["request"]["question"])
+            rnd = create_round(discussion, "answer", list(discussion.members), question=step["request"]["question"],
+                               files=step["request"].get("attachments"))
         elif action == "next":
             rnd = create_round(discussion, next_kind(discussion), list(discussion.members))
         else:
@@ -494,7 +507,8 @@ class Runner:
             rnd = discussion.rounds[-1]
         elif action in ("answer", "ask"):
             question = step["question"] if action == "answer" else step["request"]["question"]
-            rnd = council.create_round(discussion, "answer", question=question)
+            files = discussion.state.get("attachments") if action == "answer" else step["request"].get("attachments")
+            rnd = council.create_round(discussion, "answer", question=question, files=files)
         elif action == "revote":
             rnd = council.create_round(discussion, "answer", reopen=True)
         elif action == "next":

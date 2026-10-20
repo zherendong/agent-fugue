@@ -198,11 +198,24 @@ def parse_members(specs: list[str] | None, extra: list[str] | None) -> list[dict
     return members
 
 
+def read_attachments(paths: list[str] | None) -> list[tuple[str, bytes]]:
+    files = []
+    for given in paths or []:
+        path = Path(given).expanduser()
+        if not path.is_file():
+            raise FugueError(f"Not a file: {given}")
+        files.append((path.name, path.read_bytes()))
+    return files
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     question = read_text(args.question, args.file, "question")
+    if args.no_folder and args.cwd:
+        raise FugueError("--no-folder and --cwd don't go together.")
     discussion = new_discussion(
         question,
-        cwd=Path(args.cwd) if args.cwd else Path.cwd(),
+        cwd=None if args.no_folder else Path(args.cwd) if args.cwd else Path.cwd(),
+        attachments=read_attachments(args.attach),
         title=args.title,
         timeout_minutes=args.timeout,
         members=parse_members(args.member, args.member_args),
@@ -238,7 +251,11 @@ def cmd_next(args: argparse.Namespace) -> int:
 def cmd_ask(args: argparse.Namespace) -> int:
     discussion = select_discussion(args.discussion)
     question = read_text(args.question, args.file, "question")
-    discussion.add_request({"type": "ask", "question": question})
+    request = {"type": "ask", "question": question}
+    files = read_attachments(args.attach)
+    if files:
+        request["attachments"] = discussion.attach(files)
+    discussion.add_request(request)
     discussion.update_control(paused=False)
     return run_here(discussion, args.quiet)
 
@@ -520,7 +537,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-web", action="store_true",
                    help="don't let either member use the web (on by default for both)")
     p.add_argument("--title", help="short name for the discussion (default: the question's first line)")
-    p.add_argument("--cwd", help="folder the agents work in (default: the current folder)")
+    p.add_argument("--cwd", help="folder the members work in (default: the current folder)")
+    p.add_argument("--no-folder", action="store_true",
+                   help="no project folder: the members work only from the question and its attachments")
+    p.add_argument("--attach", action="append", metavar="FILE",
+                   help="attach a file to the question (PDF, Word, images, text; repeat for more)")
     p.add_argument("--member", action="append", metavar="TOOL[:MODEL[:EFFORT]]",
                    help="a member: claude, codex or dsh (the DeepSeek Harness), optionally with a model and effort "
                         "(see `fugue models`). Give it two to four times, e.g. --member claude:claude-opus-5-5:high "
@@ -547,6 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    "its own first, then comment and update rounds follow as before.")
     p.add_argument("question", nargs="?", help="the question; - for stdin, or leave it out to use $EDITOR")
     p.add_argument("-f", "--file", help="read the question from this file")
+    p.add_argument("--attach", action="append", metavar="FILE", help="attach a file to the follow-up (repeat for more)")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("note", parents=[which], help="add your own view to the next round",

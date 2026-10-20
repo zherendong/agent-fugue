@@ -286,3 +286,30 @@ def test_only_a_council_votes_again(server):
     wait_for_phase(server, created["id"], {"paused"})
     assert call(server, "POST", f"/api/discussions/{created['id']}/requests", {"type": "revote"})[0] == 400
     assert call(server, "POST", f"/api/discussions/{created['id']}/editor", {"member": "A"})[0] == 400
+
+
+def test_attachments_from_the_page(server):
+    import base64
+
+    from tests.test_attachments import PNG
+
+    status, created = call(server, "POST", "/api/discussions", {
+        "question": "What is in this picture?", "cwd": "", "max_rounds": 0,
+        "attachments": [{"name": "shot.png", "data": base64.b64encode(PNG).decode()},
+                        {"name": "notes.txt", "data": base64.b64encode(b"hello").decode()}]})
+    assert status == 201
+    ident = created["id"]
+    data = wait_for_phase(server, ident, {"finished"})
+    assert data["no_folder"] is True and [a["name"] for a in data["attachments"]] == ["shot.png", "notes.txt"]
+    connection = http.client.HTTPConnection("127.0.0.1", server["port"], timeout=10)
+    connection.request("GET", f"/api/discussions/{ident}/attachments/shot.png?token={server['app'].token}",
+                       headers={"Host": f"127.0.0.1:{server['port']}"})
+    response = connection.getresponse()
+    assert response.status == 200 and response.getheader("Content-Type") == "image/png" and response.read() == PNG
+    connection.close()
+    assert call(server, "GET", f"/api/discussions/{ident}/attachments/..%2Fstate.json")[0] == 404
+    assert call(server, "GET", f"/api/discussions/{ident}/attachments/nope.png")[0] == 404
+    _, folders = call(server, "GET", "/api/folders")
+    assert data["cwd"] not in folders["recent"]
+    status, error = call(server, "POST", "/api/discussions", {"question": "Q?", "attachments": [{"name": "x", "data": "%%%"}]})
+    assert status == 400 and "isn't valid base64" in error["error"]

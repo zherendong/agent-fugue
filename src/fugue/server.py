@@ -13,7 +13,10 @@ use it to start agents on this machine.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import mimetypes
 import re
 import secrets
 import sys
@@ -25,7 +28,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import __version__, council, engine, transcript
 from .agents import find_binary
@@ -33,6 +36,10 @@ from .store import TOOLS, Discussion, FugueError, list_discussions
 
 STATIC_FILES = {"app.js": "text/javascript", "app.css": "text/css"}
 CONTROL_KEYS = {"paused": bool, "pause_after_each_round": bool, "max_rounds": int}
+# An attached file, for the page to show or open.
+FILE_ROUTE = re.compile(r"^/api/discussions/([A-Za-z0-9][A-Za-z0-9._-]*)/attachments/([^/]+)$")
+UPLOAD_LIMIT = 75_000_000  # 50 MB of files, as base64 in JSON
+
 ROUTE = re.compile(r"^/api/discussions/([A-Za-z0-9][A-Za-z0-9._-]*)(?:/([a-z]+))?(?:/([A-Za-z0-9]+))?$")
 
 
@@ -73,6 +80,21 @@ def conversation(discussion: Discussion, letter: str, upto: int) -> list[dict]:
     return items
 
 
+def _uploads(given) -> list[tuple[str, bytes]]:
+    """Files sent with a question: [{"name", "data" (base64)}]."""
+    if given is None:
+        return []
+    if not isinstance(given, list) or not all(isinstance(f, dict) for f in given):
+        raise BadRequest("attachments must be a list of {name, data}.")
+    files = []
+    for item in given:
+        try:
+            files.append((str(item.get("name") or "attachment"), base64.b64decode(str(item.get("data") or ""), validate=True)))
+        except (binascii.Error, ValueError):
+            raise BadRequest(f"The attachment {item.get('name')!r} isn't valid base64.") from None
+    return files
+
+
 def detail(discussion: Discussion) -> dict:
     rounds = []
     for rnd in discussion.rounds:
@@ -89,11 +111,14 @@ def detail(discussion: Discussion) -> dict:
             entries[agent] = item
         rounds.append({"index": rnd["index"], "kind": rnd["kind"], "question": rnd.get("question"),
                        "reopen": bool(rnd.get("reopen")), "vote": rnd.get("vote"),
+                       "attachments": rnd.get("attachments", []),
                        "label": transcript.round_heading(rnd, council.is_council(discussion.members)),
                        "entries": entries})
     return {
         **summary(discussion),
         "question": discussion.state["question"],
+        "attachments": discussion.state.get("attachments", []),
+        "no_folder": bool(discussion.state.get("no_folder")),
         # Three or four members vote, merge and review instead of commenting side by side.
         "council": council.is_council(discussion.members),
         "control": discussion.read_control(),
@@ -179,9 +204,9 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         return True
 
-    def _body(self) -> dict:
+    def _body(self, limit: int = 2_000_000) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
-        if length > 2_000_000:
+        if length > limit:
             raise BadRequest("Request too large.")
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
@@ -259,6 +284,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/folders" and method == "GET":
             recent = []
             for discussion in reversed(list_discussions()):
+                if discussion.state.get("no_folder"):
+                    continue
                 if discussion.state["cwd"] not in recent:
                     recent.append(discussion.state["cwd"])
             return self._json({"default": str(self.app.default_cwd), "recent": recent[:15]})
@@ -266,7 +293,10 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self._json([summary(d) for d in reversed(list_discussions())])
             if method == "POST":
-                return self._create(self._body())
+                return self._create(self._body(UPLOAD_LIMIT))
+        match = FILE_ROUTE.match(path)
+        if match and method == "GET":
+            return self._attachment(Discussion.by_id(match.group(1)), unquote(match.group(2)))
         match = ROUTE.match(path)
         if not match:
             return self._error(HTTPStatus.NOT_FOUND, "Not found.")
@@ -307,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
         if action == "control" and method == "POST":
             return self._control(discussion, self._body())
         if action == "requests" and method == "POST":
-            return self._request(discussion, self._body())
+            return self._request(discussion, self._body(UPLOAD_LIMIT))
         if action == "editor" and method == "POST":
             letter = str(self._body().get("member") or "")
             try:
@@ -323,6 +353,24 @@ class Handler(BaseHTTPRequestHandler):
                 discussion.update_control(stop_requested=True)
             return self._json({"ok": True})
         return self._error(HTTPStatus.NOT_FOUND, "Not found.")
+
+    def _attachment(self, discussion: Discussion, name: str) -> None:
+        folder = discussion.attachments_dir.resolve()
+        target = (folder / name).resolve()
+        if target.parent != folder or not target.is_file():
+            return self._error(HTTPStatus.NOT_FOUND, "No such file.")
+        data = target.read_bytes()
+        kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if kind.startswith("text/") or kind in ("application/json", "image/svg+xml"):
+            kind = "text/plain; charset=utf-8"  # shown as text, never run as a page
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(target.name)}")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _create(self, body: dict) -> None:
         from .config import new_discussion
@@ -342,9 +390,13 @@ class Handler(BaseHTTPRequestHandler):
         members = body.get("members")
         if members is not None and (not isinstance(members, list) or not all(isinstance(m, dict) for m in members)):
             raise BadRequest("members must be a list of {tool, model, effort, args}.")
+        # An empty folder means none: the members work among the attachments.
+        given = body.get("cwd")
+        cwd = None if given == "" else Path(text("cwd") or str(self.app.default_cwd))
         discussion = new_discussion(
             str(body.get("question") or ""),
-            cwd=Path(text("cwd") or str(self.app.default_cwd)),
+            cwd=cwd,
+            attachments=_uploads(body.get("attachments")),
             title=text("title"),
             timeout_minutes=float(timeout) if timeout else None,
             members=members,
@@ -373,6 +425,9 @@ class Handler(BaseHTTPRequestHandler):
             if not question:
                 raise BadRequest("The question is empty.")
             request = {"type": "ask", "question": question}
+            files = _uploads(body.get("attachments"))
+            if files:
+                request["attachments"] = discussion.attach(files)
         else:
             raise BadRequest("`type` must be next, ask or revote.")
         request = discussion.add_request(request)

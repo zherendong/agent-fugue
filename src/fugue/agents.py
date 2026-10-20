@@ -144,7 +144,8 @@ def claude_command(binary: str, *, session_id: str | None, model: str | None, ex
 
 
 def codex_command(binary: str, *, session_id: str | None, model: str | None, extra_args: list[str],
-                  reply_file: Path, effort: str | None = None, web: bool = True) -> list[str]:
+                  reply_file: Path, effort: str | None = None, web: bool = True,
+                  images: list[str] = ()) -> list[str]:
     cmd = [binary, "exec"]
     if session_id:
         cmd.append("resume")
@@ -156,6 +157,8 @@ def codex_command(binary: str, *, session_id: str | None, model: str | None, ext
     if effort:
         cmd += ["-c", f'model_reasoning_effort="{effort}"']
     cmd += list(extra_args)
+    # `--image` takes several files, so the = form keeps it from taking the session id or `-` too.
+    cmd += [f"--image={image}" for image in images]
     if session_id:
         cmd.append(session_id)
     return cmd + ["-"]  # read the prompt from stdin

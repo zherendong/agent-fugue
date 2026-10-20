@@ -78,22 +78,29 @@ def check_members(members: list[dict]) -> None:
             check_effort(member["tool"], member["model"], member["effort"], known[member["tool"]])
 
 
-def new_discussion(question: str, *, cwd: Path, title: str | None = None, timeout_minutes: float | None = None,
+def new_discussion(question: str, *, cwd: Path | None, title: str | None = None, timeout_minutes: float | None = None,
                    members: list[dict] | None = None, web: bool | None = None,
-                   control: dict | None = None) -> Discussion:
+                   control: dict | None = None, attachments: list[tuple[str, bytes]] | None = None) -> Discussion:
     """Create a discussion from the config file's defaults with the given values on top.
 
     `members` lists each member's tool, model, effort and extra arguments, in the
     order the user gave them; their letters are drawn at random. Without it, the
     config file's line-up is used. `control` values that are None fall back to
-    the config file, then to fugue's defaults.
+    the config file, then to fugue's defaults. Without a folder (`cwd` None),
+    the members work in the discussion's own folder of attachments.
+    `attachments` are (file name, contents) pairs.
     """
+    from .attachments import MAX_TOTAL_BYTES
+
     question = question.strip()
     if not question:
         raise FugueError("The question is empty.")
-    cwd = cwd.expanduser().resolve()
-    if not cwd.is_dir():
-        raise FugueError(f"Not a folder: {cwd}")
+    if cwd is not None:
+        cwd = cwd.expanduser().resolve()
+        if not cwd.is_dir():
+            raise FugueError(f"Not a folder: {cwd}")
+    if sum(len(data) for _, data in attachments or []) > MAX_TOTAL_BYTES:
+        raise FugueError(f"The attachments come to more than {MAX_TOTAL_BYTES // (1024 * 1024)} MB.")
     config = load_config()
     chosen_members = [normalize_member(m) for m in members] if members else default_members(config)
     check_members(chosen_members)
@@ -108,4 +115,5 @@ def new_discussion(question: str, *, cwd: Path, title: str | None = None, timeou
         value = control.get(key)
         chosen[key] = value if value is not None else config.get(key, DEFAULT_CONTROL[key])
     return Discussion.create(question=question, title=title or make_title(question), cwd=cwd,
-                             members=chosen_members, settings=settings, control=chosen)
+                             members=chosen_members, settings=settings, control=chosen,
+                             attachments=attachments or [])

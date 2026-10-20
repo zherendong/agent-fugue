@@ -790,3 +790,52 @@ def test_rankings_and_ties():
     result = tally(Fake(), rnd)
     assert result["points"] == {"A": 2, "B": 2, "C": 0, "D": 0}
     assert result["chosen"] in ("A", "B") and result["chosen_by"] == "drawn at random between A and B, who tied"
+
+
+# ---------------------------------------------------------------------------
+# Attached files
+
+
+def test_a_question_with_attachments_and_no_folder(env, capsys):
+    from tests.test_attachments import PNG, tiny_pdf
+
+    files = env["work"].parent / "files"
+    files.mkdir()
+    (files / "resume.pdf").write_bytes(tiny_pdf("Ten years of Rust"))
+    (files / "shot.png").write_bytes(PNG)
+    assert fugue("start", "Review this resume.", "-n", "0", "-q", "--no-folder",
+                "--attach", str(files / "resume.pdf"), "--attach", str(files / "shot.png")) == 0
+    discussion = latest()
+    folder = discussion.attachments_dir
+    assert discussion.state["no_folder"] and Path(discussion.state["cwd"]) == folder
+    assert sorted(p.name for p in folder.iterdir()) == ["resume.pdf", "resume.pdf.txt", "shot.png"]
+    made = calls(env)
+    assert all(Path(c["cwd"]).resolve() == folder.resolve() for c in made)
+    claude, codex = to("claude", made), to("codex", made)
+    for call in (claude, codex):
+        assert call["prompt"].startswith("Review this resume.\n\nThe user attached these files")
+        assert f"{folder / 'resume.pdf.txt'}" in call["prompt"]
+    assert "Open it with your image or file reading tool." in claude["prompt"]
+    assert "It is also attached to this message." in codex["prompt"]
+    assert f"--image={folder / 'shot.png'}" in codex["args"] and codex["args"][-1] == "-"
+    text = discussion.transcript_path.read_text()
+    assert f"- `{folder / 'resume.pdf'}` (and its text: resume.pdf.txt)" in text
+    # The folders offered for new questions leave this one out.
+    assert discussion.state["cwd"] not in [d.state["cwd"] for d in list_discussions() if not d.state.get("no_folder")]
+
+
+def test_a_follow_up_with_an_attachment(env):
+    from tests.test_attachments import PNG
+
+    image = env["work"].parent / "chart.png"
+    image.write_bytes(PNG)
+    fugue("start", "Q?", "-n", "0", "-q")
+    assert fugue("ask", "And this chart?", "--attach", str(image), "-q") == 0
+    discussion = latest()
+    followup = discussion.rounds[-1]
+    assert followup["kind"] == "answer" and followup["attachments"][0]["name"] == "chart.png"
+    codex_calls = [c for c in calls(env) if c["agent"] == "codex"]
+    assert not any(a.startswith("--image=") for a in codex_calls[0]["args"])  # the first question had none
+    assert f"--image={discussion.attachments_dir / 'chart.png'}" in codex_calls[-1]["args"]
+    assert codex_calls[-1]["args"][:2] == ["exec", "resume"]
+    assert "chart.png" in to("claude", calls(env)[-2:])["prompt"]

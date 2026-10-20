@@ -28,6 +28,7 @@ from __future__ import annotations
 import random
 import re
 
+from .attachments import with_attachments
 from .prompts import build_council_prompt, join_letters
 from .store import Discussion, FugueError, now_iso
 
@@ -211,7 +212,8 @@ def choose_editor(discussion: Discussion, letter: str) -> None:
 # -- writing the messages for a round
 
 
-def create_round(discussion: Discussion, kind: str, *, question: str | None = None, reopen: bool = False) -> dict:
+def create_round(discussion: Discussion, kind: str, *, question: str | None = None, reopen: bool = False,
+                 files: list[dict] | None = None) -> dict:
     """Add a council round, writing the exact message each participant will receive."""
     rounds = discussion.rounds
     if rounds and not is_complete(rounds[-1]):
@@ -224,6 +226,8 @@ def create_round(discussion: Discussion, kind: str, *, question: str | None = No
         rnd["question"] = question
         if reopen:
             rnd["reopen"] = True
+        if files:
+            rnd["attachments"] = files
     elif kind != "vote" and editor is None:
         raise FugueError(f"A {kind} round needs a vote first.")
 
@@ -262,8 +266,11 @@ def create_round(discussion: Discussion, kind: str, *, question: str | None = No
 
     for letter, plan in planned.items():
         notes = discussion.take_notes(letter)
+        asked = question
+        if kind == "answer" and question is not None:
+            asked = with_attachments(question, files, images_attached=discussion.members[letter]["tool"] == "codex")
         prompt = build_council_prompt(
-            kind, me=letter, letters=letters, editor=editor, question=question,
+            kind, me=letter, letters=letters, editor=editor, question=asked,
             followup=kind == "answer" and index > 0 and not reopen, reopen=reopen, later=plan.get("later", False),
             messages=plan["messages"], notes=[(n["text"], n["shared"]) for n in notes])
         discussion.prompt_path(index, letter).write_text(prompt)
