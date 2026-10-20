@@ -1,7 +1,7 @@
 [project]
 name = "agent-fugue"
 version = "0.1.0"
-description = "Ask two coding agents (Claude Code, Codex) the same question, then let them review each other."
+description = "Ask two to four coding agents (Claude Code, Codex, DeepSeek) the same question, then let them review each other."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

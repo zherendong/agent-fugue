@@ -37,6 +37,8 @@ Reviews and revisions alternate until no reviewer objects, or until the round li
 
 **Hidden names, fixed letters.** The members are never told which agent or model the other is. Each gets a letter for the whole discussion, member A or member B, drawn at random when the discussion starts, so the first member you choose isn't always "A". Every message from round 1 on says "You are member A; the other member is member B", forwarded replies are marked `from="member B"`, and the members are asked to refer to each other only by letter. A letter means the same member to whoever reads it, whereas "the other member" would point to someone else once a reply is passed on. The page, the transcript and `fugue status` show you who is who, for example "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)" when both members use the same tool. The exact wording sent to the members is in [src/fugue/prompts.py](src/fugue/prompts.py); edit it there to change how they talk to each other.
 
+**Attached files.** A question (or a follow-up) can come with files: PDFs, Word files, images, text. They are kept in the discussion's own `attachments/` folder, and each member's first message for that question lists them after the question with their kind, size and path. PDF and Word files get a text version next to them (pypdf for PDFs), so every member can read them whatever its tool reads: Claude Code opens images and PDFs itself, Codex is handed the images with its message (`--image`), and the DeepSeek Harness reads text and, on image-capable models such as DeepSeek Flash, images. A question takes up to 50 MB of files. A question doesn't need a project folder: without one, the members work in the attachments folder, which suits reviewing a resume or a design document.
+
 **Where you come in.** fugue pauses and names the next step, for example "Next: each comments on the other's answer"; you move it on when you're ready. Two members pause after every round; a council pauses after its vote (to see the points, and start from another answer if you like) and after each revision. At any time you can:
 
 - add a note to every member or just one; it goes into the next message fugue sends that member;
@@ -118,10 +120,10 @@ fugue service uninstall    # stop it and remove it
 |---|---|
 | `fugue web` | Open the web page (`--port`, `--no-open`). |
 | `fugue service install` | Keep the web page running in the background on macOS; also `status`, `restart`, `uninstall`. |
-| `fugue start "question"` | Start a discussion; every member answers, then it goes on to the first pause. `--member` (two to four times) picks the members, `-n 3` sets the round limit, `--no-pause` runs every round without waiting for you, `--no-web` keeps every member off the web. |
+| `fugue start "question"` | Start a discussion; every member answers, then it goes on to the first pause. `--member` (two to four times) picks the members, `--attach FILE` (repeatable) attaches files, `--no-folder` asks without a project folder, `-n 3` sets the round limit, `--no-pause` runs every round without waiting for you, `--no-web` keeps every member off the web. |
 | `fugue continue` | Run the next round (it says which), or retry the agents that failed or were stopped. |
 | `fugue next` | Run one more round, also after they agreed or reached the limit. |
-| `fugue ask "question"` | Ask a follow-up in the same discussion. |
+| `fugue ask "question"` | Ask a follow-up in the same discussion (`--attach FILE` to attach files). |
 | `fugue revote` | A council of three or four: every member answers again and the council votes again on where to start. |
 | `fugue note "text"` | Add your own view to the next round, for every member or one (`--to A`, `--to B`, ...). |
 | `fugue pause` / `fugue stop` | Pause after the current round / stop the agents now. Works on a discussion running in another terminal or the page. |
@@ -211,6 +213,7 @@ Discussions are kept outside your projects, in `~/.fugue/discussions/` (or `$FUG
   events.jsonl                   everything that happened, in order; the page reads this live
   control.json                   round limit, pause and stop settings
   inbox.json                     your notes and requests waiting for the next round
+  attachments/                   the files attached to its questions, with text versions of PDF and Word files
   rounds/00-A.prompt.md          exactly what fugue sent to member A in round 0
   rounds/00-A.md                 member A's reply in round 0
   logs/                          raw output of each agent call, for debugging
