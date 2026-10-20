@@ -72,8 +72,16 @@ def entry_heading(kind: str, discussion: Discussion, letter: str) -> str:
 def resume_command(discussion: Discussion, letter: str, session_id: str) -> str:
     """The command that opens a member's session in its own tool, with its memory of the discussion."""
     folder = shlex.quote(str(discussion.cwd))
-    if discussion.members[letter]["tool"] == "claude":
+    tool = discussion.members[letter]["tool"]
+    if tool == "claude":
         return f"cd {folder} && claude --resume {session_id}"
+    if tool == "dsh":
+        # dsh opens a session by id only in headless mode, one message at a time. The settings overlay of the
+        # member's last run keeps its model and lets it use the API key saved in dsh, as in the discussion.
+        overlays = [discussion.log_stem(rnd["index"], letter).with_suffix(".dsh-patch.yml")
+                    for rnd in reversed(discussion.rounds)]
+        patch = next((f" --patch {shlex.quote(str(path))}" for path in overlays if path.exists()), "")
+        return f'cd {folder} && dsh --profile headless{patch} --session-id {session_id} "<your message>"'
     return f"cd {folder} && codex resume {session_id}"
 
 

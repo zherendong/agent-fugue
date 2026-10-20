@@ -168,6 +168,10 @@ def codex_command(binary: str, *, session_id: str | None, model: str | None, ext
 # macOS), and with no one to approve anything: a step that would need approval
 # is refused. Its telemetry (which by default sends session records after a
 # user's feedback) and its extra model call for a session title are off.
+# dsh's headless profile turns off its credential store and takes the API key
+# only from the launch environment, which a background service doesn't have;
+# turning the store back on lets a run use the key saved in dsh (its
+# `.credentials.yaml`, written by its Models page), as the user's own dsh does.
 DSH_ENV = {"DSH_PERMISSION_MODE": "read-only", "DSH_TELEMETRY_MODE": "DISABLED"}
 DSH_DEFAULT_MODEL = "deepseek-flash"
 
@@ -177,7 +181,8 @@ def dsh_overlay(*, model: str | None, effort: str | None, web: bool = True) -> s
     lines = ["# Written by fugue for one run of the DeepSeek Harness.",
              "- id: approval", "  config:", "    policy: never",
              "- id: session-telemetry-otel", "  config:", "    mode: DISABLED",
-             "- id: session-title-llm", "  disabled: true"]
+             "- id: session-title-llm", "  disabled: true",
+             "- id: credentials", "  disabled: false"]
     if model or effort:
         lines += ["- id: agent-default-model", "  config:", "    provider: deepseek-official",
                   f"    model: {json.dumps(model or DSH_DEFAULT_MODEL)}"]
