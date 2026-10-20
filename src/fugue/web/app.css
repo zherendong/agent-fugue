@@ -298,6 +298,8 @@ button.link:hover { color: var(--text); }
 }
 .tabs button.on { color: var(--text); border-bottom-color: var(--text); }
 .tabs .model { color: var(--muted); font-size: 12.5px; }
+/* With tabs, the tab already names the member, so the reply header doesn't repeat it. */
+.pair.tabbed .col-head .mdot, .pair.tabbed .col-head .who, .pair.tabbed .col-head .model, .pair.tabbed .col-head .letter { display: none; }
 .tabs .letter { color: var(--faint); font-size: 12.5px; }
 
 /* Your own entries: notes and follow-up questions. */
