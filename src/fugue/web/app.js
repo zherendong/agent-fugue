@@ -1149,11 +1149,11 @@ function voteBoard(d, r) {
   const unread = Object.entries(r.entries).filter(([, e]) => e.ballot_problem);
   return el('div', { class: 'vote-board' },
     order.map((letter) => el('div', { class: `vote-row${letter === v.chosen ? ' chosen' : ''}` },
-      el('span', { class: 'vote-who' },
+      el('span', { class: 'vote-who', title: runsWith(d, letter) },
         el('span', { class: `mdot ${memberClass(d, letter)}` }),
         el('b', {}, NAMES[d.members[letter].tool]), ' ',
-        el('span', { class: 'model' }, modelLabel(d, letter)), ' ',
-        el('span', { class: 'letter' }, `member ${letter}`)),
+        el('span', { class: 'letter' }, `member ${letter}`), ' ',
+        el('span', { class: 'model' }, modelLabel(d, letter))),
       el('span', { class: 'vote-bar' }, el('span', { style: `width: ${Math.round((v.points[letter] / top) * 100)}%` })),
       el('span', { class: 'vote-points' }, `${plural(v.points[letter], 'point')} · ranked first ${v.first[letter]}×`),
       letter === v.chosen
@@ -1644,6 +1644,7 @@ function barActions(d) {
       'Every member answers again and the council votes again: for when it started from the wrong answer.'));
   }
   if (ask) items.unshift(attach);
+  primary.title = primary.title || primary.textContent;
   S.primary = primary;
   return [...items, primary];
 }

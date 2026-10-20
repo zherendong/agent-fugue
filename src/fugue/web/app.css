@@ -296,8 +296,9 @@ button.link:hover { color: var(--text); }
 .vote-row.chosen .vote-who b { color: var(--text); }
 .vote-who { display: flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vote-who .mdot { margin-right: 4px; }
-.vote-who .model { color: var(--muted); }
-.vote-who .letter { color: var(--faint); }
+.vote-who .model { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.vote-who b { flex: none; }
+.vote-who .letter { flex: none; color: var(--faint); }
 .vote-bar { height: 6px; border-radius: 3px; background: var(--hover); overflow: hidden; }
 .vote-bar span { display: block; height: 100%; background: var(--faint); border-radius: 3px; }
 .vote-row.chosen .vote-bar span { background: var(--accent); }
@@ -513,9 +514,10 @@ button.link:hover { color: var(--text); }
 #composer-hint { grid-area: hint; }
 .composer-box.open #composer-text { padding: 0 6px; }
 .bar-actions { display: flex; align-items: center; gap: 4px; }
-.bar-actions .btn.primary { margin-left: 4px; }
+.bar-actions .btn.primary { margin-left: 4px; display: inline-block; max-width: min(380px, 34vw); overflow: hidden; text-overflow: ellipsis; }
 #composer-mode {
   max-width: 190px;
+  field-sizing: content;
   border: none;
   border-radius: 6px;
   background: transparent;
