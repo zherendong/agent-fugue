@@ -640,3 +640,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
   .form .grid { grid-template-columns: 1fr; }
   .form .member-row { grid-template-columns: 1fr; gap: 6px; }
 }
+
+button.link.accent { color: var(--accent); font-size: inherit; }
+button.link.accent:hover { text-decoration: underline; }

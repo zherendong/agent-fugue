@@ -385,16 +385,6 @@ function notify(d) {
   };
 }
 
-function setUpNotifications() {
-  const button = $('#notify');
-  if (!('Notification' in window) || Notification.permission !== 'default') return;
-  button.hidden = false;
-  button.addEventListener('click', async () => {
-    await Notification.requestPermission();
-    button.hidden = Notification.permission === 'default';
-  });
-}
-
 // On narrow windows the list of discussions slides in from the left, opened
 // by the ☰ button at the top of each page.
 
@@ -1518,6 +1508,22 @@ async function saveSettings(form) {
   if (await attempt(() => api('POST', '/api/settings', body))) toast('Defaults saved.');
 }
 
+// Desktop notifications when a discussion stops running. The browser asks
+// once; afterwards its own site settings decide.
+function notificationsRow(row, redraw) {
+  const label = 'Desktop notifications';
+  if (!('Notification' in window)) return row('warn', label, "This browser doesn't support them.");
+  if (Notification.permission === 'granted') return row('good', label, 'On: you get one when a discussion stops and needs you.');
+  if (Notification.permission === 'denied') {
+    return row('warn', label, "Blocked. Allow notifications for this page in your browser's site settings to turn them on.");
+  }
+  return row('warn', label, 'Off. ', el('button', {
+    class: 'link accent',
+    type: 'button',
+    onclick: async () => { await Notification.requestPermission(); redraw(); },
+  }, 'Turn on'), ' to get one when a discussion stops and needs you.');
+}
+
 async function drawStatus(box) {
   box.replaceChildren(el('p', { class: 'muted' }, 'Checking…'));
   const s = await api('GET', '/api/status').catch((error) => ({ error: error.message }));
@@ -1543,6 +1549,7 @@ async function drawStatus(box) {
       el('div', {}, `Off whenever Codex takes part in a discussion: ${offList.join(', ')}.`),
       el('div', { class: 'muted' }, "They could change files or act in your accounts, which Codex's read-only sandbox doesn't "
         + 'stop. When you use Codex yourself, they work as usual.')),
+    notificationsRow(row, () => drawStatus(box)),
     row(s.service.running ? 'good' : 'warn', 'Background service', s.service.text),
     row('good', 'Discussions', `${s.storage.discussions} in `, el('code', {}, tilde(s.storage.path)), ` (${s.storage.megabytes} MB)`),
     row('good', 'This page', `fugue ${s.version} on port ${s.port}`));
@@ -1584,7 +1591,6 @@ function init() {
     markStuck();
   }, { passive: true });
   window.addEventListener('hashchange', route);
-  setUpNotifications();
   setInterval(tick, 1000);
   setInterval(refreshList, 2000);
   setInterval(() => { if (S.id && !document.hidden) refreshDetail(); }, 5000);
