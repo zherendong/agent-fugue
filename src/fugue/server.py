@@ -103,7 +103,8 @@ def detail(discussion: Discussion) -> dict:
         for agent, entry in rnd["entries"].items():
             item = {key: entry.get(key) for key in
                     ("status", "error", "duration_s", "objections", "remaining", "started_at", "finished_at",
-                     "cost_usd", "tokens", "ranking", "ballot_problem", "candidates", "starting_point")}
+                     "cost_usd", "tokens", "ranking", "ballot_problem", "candidates", "starting_point",
+                     "suggestions")}
             item["notes"] = entry.get("notes", [])
             item["forwarded"] = entry.get("forwarded", [])
             item["heading"] = transcript.entry_heading(rnd["kind"], discussion, agent)
@@ -111,7 +112,8 @@ def detail(discussion: Discussion) -> dict:
                 item["reply"] = discussion.read_reply(rnd["index"], agent)
             entries[agent] = item
         rounds.append({"index": rnd["index"], "kind": rnd["kind"], "question": rnd.get("question"),
-                       "reopen": bool(rnd.get("reopen")), "vote": rnd.get("vote"),
+                       "reopen": bool(rnd.get("reopen")), "closing": bool(rnd.get("closing")),
+                       "vote": rnd.get("vote"),
                        "attachments": rnd.get("attachments", []),
                        "label": transcript.round_heading(rnd, council.is_council(discussion.members)),
                        "entries": entries})

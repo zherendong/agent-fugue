@@ -22,6 +22,8 @@ const S = {
   refreshTimer: 0,
   follow: false,        // keep the view scrolled to the bottom while it runs
   activityOpen: new Set(), // "discussion:round:letter" of replies whose actions are shown
+  diffOpen: new Set(),     // "discussion:round:letter" of answers shown as changes from the version before
+  responsesOpen: new Set(), // "discussion:round:letter" of latest answers whose responses are unfolded
   historyOpen: new Set(),  // discussions whose earlier rounds are unfolded
   roundOpen: new Set(),    // "discussion:round" of earlier rounds that are unfolded
   questionOpen: new Set(), // discussions whose long question is shown in full
@@ -1124,6 +1126,11 @@ function chosenBefore(d, index) {
 
 function roundTitle(r) {
   const d = S.detail;
+  if (r.closing) {
+    const who = Object.keys(r.entries);
+    if (d && d.council) return `Member ${who[0]} writes the final version, taking in the last suggestions`;
+    return who.length === 1 ? `${shortWho(d, who[0])} takes in the last suggestions` : 'Each takes in the last suggestions';
+  }
   if (r.kind === 'answer' && r.reopen) return 'Everyone answers again, for a new vote';
   if (r.kind === 'answer' && r.index > 0) return 'Follow-up question, independent answers';
   if (d && d.council && r.kind !== 'answer') {
@@ -1270,17 +1277,81 @@ function resultSection(d) {
   return el('section', { class: 'answers', id: 'round-result' },
     sectionHead(d.council && shown.length === 1 ? "The council's answer" : 'Their latest answers', shown.length),
     asked.index > 0 ? followupBlock(asked) : null,
-    pairOf(d, shown, (letter) => resultColumn(d, letter, latest[letter])));
+    pairOf(d, shown, (letter) => resultColumn(d, letter, latest[letter])),
+    stillOpen(d));
 }
 
 function resultColumn(d, letter, r) {
   const e = r.entries[letter];
   return el('article', { class: `reply-col ${memberClass(d, letter)} status-done` },
     columnHead(d, letter, `from step ${stepOf(r.index)}`, ''),
-    el('div', { class: 'reply md', html: md(e.reply) }),
+    replyBody(d, r, letter, e.reply, true),
     el('footer', {},
+      versionLinks(d, r, letter, e.reply, true),
       el('button', { class: 'link', type: 'button', onclick: () => showContext(r.index, letter) }, 'Inspect context'),
-      el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy')));
+      el('button', { class: 'link', type: 'button', onclick: () => copy(splitReply(e.reply).answer) }, 'Copy')));
+}
+
+// When the members stopped at the round limit with objections left: the last
+// objections, and how each answer's author responded to them.
+function stillOpen(d) {
+  if (d.status.phase !== 'finished' || d.status.label.startsWith('Agreed')) return null;
+  const rounds = currentRounds(d);
+  const critiques = rounds.filter((r) => r.kind === 'comment' || (d.council && r.kind === 'review'));
+  const last = critiques[critiques.length - 1];
+  if (!last) return null;
+  const items = [];
+  for (const [critic, e] of Object.entries(last.entries)) {
+    if (e.status !== 'done' || !e.objections) continue;
+    const read = () => openRound(d, last.index);
+    if (d.council) {
+      items.push(foldBlock(`${shortWho(d, critic)}: ${plural(e.objections, 'objection')} to the council's answer`, e.reply,
+        el('button', { type: 'button', class: 'link', onclick: read }, `Read it in step ${stepOf(last.index)}`)));
+      continue;
+    }
+    const author = otherLetter(d, critic);
+    const update = rounds.find((r) => r.index > last.index && r.kind === 'update'
+      && r.entries[author] && r.entries[author].status === 'done');
+    const responses = update ? splitReply(update.entries[author].reply).responses : '';
+    items.push(foldBlock(responses
+      ? `${shortWho(d, critic)}: ${plural(e.objections, 'objection')} to ${shortWho(d, author)}'s answer. ${shortWho(d, author)}'s responses:`
+      : `${shortWho(d, critic)}: ${plural(e.objections, 'objection')} to ${shortWho(d, author)}'s answer`,
+    responses || e.reply,
+    el('button', { type: 'button', class: 'link', onclick: read }, `Read ${shortWho(d, critic)}'s comments in step ${stepOf(last.index)}`)));
+  }
+  if (!items.length) return null;
+  return el('div', { class: 'still-open' },
+    el('h2', {}, 'Still open'),
+    el('p', { class: 'muted' }, 'The last comments still had objections when the round limit was reached.'),
+    items);
+}
+
+// A piece of text with a label and optional links under it; a long one starts folded to a few lines.
+function foldBlock(label, text, ...extra) {
+  const long = text.length > 500 || text.split('\n').length > 8;
+  const node = el('div', { class: `fold${long ? ' clamped' : ''}` },
+    el('div', { class: 'fold-label' }, label),
+    el('div', { class: 'md', html: md(text) }));
+  const more = !long ? null : el('button', {
+    type: 'button',
+    class: 'link',
+    onclick: () => {
+      node.classList.toggle('clamped');
+      more.textContent = node.classList.contains('clamped') ? 'Show all' : 'Show less';
+    },
+  }, 'Show all');
+  node.append(el('div', { class: 'fold-links' }, more, ...extra));
+  return node;
+}
+
+// Unfolds an earlier step and takes you to it.
+function openRound(d, index) {
+  S.historyOpen.add(d.id);
+  S.roundOpen.add(`${d.id}:${index}`);
+  S.follow = false;
+  drawDiscussion();
+  const node = document.getElementById(`round-${index}`);
+  if (node) node.scrollIntoView({ block: 'start' });
 }
 
 // ---------------------------------------------------------------- how they got here
@@ -1346,7 +1417,9 @@ function tally(r) {
   if (r.kind === 'comment' || (d.council && r.kind === 'review')) {
     const restart = done.filter((letter) => r.entries[letter].starting_point === 'change').length;
     const again = restart ? ` · ${restart} of ${done.length} want a new start` : '';
-    if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'tally ok' }, `no objections${again}`);
+    const suggestions = done.reduce((sum, letter) => sum + (r.entries[letter].suggestions || 0), 0);
+    const tips = suggestions ? ` · ${plural(suggestions, 'suggestion')}` : '';
+    if (done.every((letter) => r.entries[letter].objections === 0)) return el('span', { class: 'tally ok' }, `no objections${tips}${again}`);
     return el('span', { class: 'tally' },
       `objections: ${done.map((letter) => `${shortWho(d, letter)} ${r.entries[letter].objections ?? '?'}`).join(', ')}${again}`);
   }
@@ -1387,7 +1460,7 @@ function card(r, letter) {
   const key = stepsKey(r.index, letter);
   let body;
   if (e.status === 'running') body = el('div', { class: 'live md' });
-  else if (e.status === 'done') body = el('div', { class: 'reply md', html: md(e.reply) });
+  else if (e.status === 'done') body = replyBody(d, r, letter, e.reply, false);
   else if (e.status === 'failed') {
     body = el('div', { class: 'error' },
       e.error === 'stopped' || e.error === 'interrupted' ? 'Stopped before it finished.' : `Failed: ${e.error}`);
@@ -1401,9 +1474,192 @@ function card(r, letter) {
   body,
   el('footer', {},
     el('button', { class: 'link steps-toggle', type: 'button', hidden: true, onclick: () => toggleSteps(r.index, letter) }),
+    e.status === 'done' ? versionLinks(d, r, letter, e.reply, false) : null,
     el('button', { class: 'link', type: 'button', onclick: () => showContext(r.index, letter) }, 'Inspect context'),
-    e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy') : null),
+    e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(splitReply(e.reply).answer) }, 'Copy') : null),
   el('ol', { class: 'steps', hidden: !S.activityOpen.has(key) }));
+}
+
+// ---------------------------------------------------------------- an answer, its responses, its changes
+// An updated, merged or revised answer ends with the member's responses to
+// the comments, after a heading kept in English: "## Responses", or "## Points
+// not taken" after a merge. What comes before it is the answer, which stands
+// on its own. Replies from before the heading was asked for are all answer.
+
+const RESPONSES_HEADING = /^##[ \t]+(Responses|Points not taken)[ \t]*$/gm;
+
+function splitReply(text) {
+  const reply = String(text || '');
+  let found = null;
+  for (const m of reply.matchAll(RESPONSES_HEADING)) found = m;
+  if (!found) return { answer: reply, responses: '', heading: '' };
+  return {
+    answer: reply.slice(0, found.index).trimEnd(),
+    responses: reply.slice(found.index + found[0].length).trim(),
+    heading: found[1],
+  };
+}
+
+function responsesLabel(parts) {
+  return parts.heading === 'Points not taken' ? 'Points not taken' : 'Responses to the comments';
+}
+
+function versionKey(d, r, letter) {
+  return `${d.id}:${r.index}:${letter}`;
+}
+
+// The same member's version of the answer before this one, for the same question.
+const VERSION_KINDS = new Set(['answer', 'update', 'final', 'merge', 'revise']);
+
+function previousVersion(d, r, letter) {
+  if (!VERSION_KINDS.has(r.kind) || r.kind === 'answer') return null;
+  for (let i = r.index - 1; i >= 0; i--) {
+    const p = d.rounds[i];
+    const e = p.entries[letter];
+    if (e && e.status === 'done' && VERSION_KINDS.has(p.kind)) return p;
+    if (p.kind === 'answer' && !p.reopen) return null;  // the question started here
+  }
+  return null;
+}
+
+// The answer (or, toggled, its changes from the version before), with its responses under it:
+// shown in a step's card, folded away under the latest answers.
+function replyBody(d, r, letter, reply, folded) {
+  const key = versionKey(d, r, letter);
+  const before = previousVersion(d, r, letter);
+  const parts = splitReply(reply);
+  if (before && S.diffOpen.has(key)) {
+    return el('div', { class: 'reply' }, diffView(splitReply(before.entries[letter].reply).answer, parts.answer, before));
+  }
+  const responses = parts.responses && (!folded || S.responsesOpen.has(key))
+    ? el('div', { class: 'responses' }, el('div', { class: 'responses-label' }, responsesLabel(parts)),
+      el('div', { class: 'md', html: md(parts.responses) }))
+    : null;
+  return el('div', { class: 'reply-body' }, el('div', { class: 'reply md', html: md(parts.answer) }), responses);
+}
+
+function versionLinks(d, r, letter, reply, folded) {
+  const key = versionKey(d, r, letter);
+  const before = previousVersion(d, r, letter);
+  const parts = splitReply(reply);
+  const flip = (set) => () => {
+    if (set.has(key)) set.delete(key);
+    else set.add(key);
+    S.follow = false;
+    drawDiscussion();
+  };
+  return [
+    before ? el('button', { class: 'link', type: 'button', onclick: flip(S.diffOpen) },
+      S.diffOpen.has(key) ? 'Show the answer' : `Changes since step ${stepOf(before.index)}`) : null,
+    folded && parts.responses && !S.diffOpen.has(key)
+      ? el('button', { class: 'link', type: 'button', onclick: flip(S.responsesOpen) },
+        S.responsesOpen.has(key) ? `Hide ${responsesLabel(parts).toLowerCase()}` : responsesLabel(parts))
+      : null,
+  ];
+}
+
+// -- what changed: lines compared first, then the words of lines that changed
+
+function lcsTable(a, b) {
+  const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  return table;
+}
+
+// [{op: 'same' | 'del' | 'add', text}] turning `a` into `b`, or null if they are too long to compare.
+function diffItems(a, b) {
+  if (a.length * b.length > 4e6) return null;
+  const table = lcsTable(a, b);
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { out.push({ op: 'same', text: b[j] }); i++; j++; }
+    else if (table[i + 1][j] >= table[i][j + 1]) out.push({ op: 'del', text: a[i++] });
+    else out.push({ op: 'add', text: b[j++] });
+  }
+  while (i < a.length) out.push({ op: 'del', text: a[i++] });
+  while (j < b.length) out.push({ op: 'add', text: b[j++] });
+  return out;
+}
+
+// Words, with each Chinese or Japanese character on its own, since those aren't spaced.
+const WORDS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]|[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
+
+// One changed line, its removed words struck through and added words marked; null if the
+// two lines have too little in common to read as one changed line.
+function wordChange(before, after) {
+  const a = before.match(WORDS) || [];
+  const b = after.match(WORDS) || [];
+  const items = diffItems(a, b);
+  if (!items) return null;
+  const kept = items.filter((x) => x.op === 'same' && x.text.trim()).reduce((n, x) => n + x.text.length, 0);
+  if (kept < 0.4 * Math.max(before.trim().length, after.trim().length)) return null;
+  // Neighbouring words with the same fate are marked as one stretch.
+  const runs = [];
+  for (const x of items) {
+    if (runs.length && runs[runs.length - 1].op === x.op) runs[runs.length - 1].text += x.text;
+    else runs.push({ ...x });
+  }
+  return runs.map((x) => (x.op === 'same' ? escapeHtml(x.text)
+    : x.op === 'del' ? `<del>${escapeHtml(x.text)}</del>` : `<ins>${escapeHtml(x.text)}</ins>`)).join('');
+}
+
+function diffView(beforeText, afterText, beforeRound) {
+  const a = beforeText.split('\n').map((l) => l.trimEnd());
+  const b = afterText.split('\n').map((l) => l.trimEnd());
+  const items = diffItems(a, b);
+  if (!items) return el('p', { class: 'muted' }, 'These versions are too long to compare here.');
+  // Rows: a run of removed lines next to a run of added ones pairs up into changed lines.
+  const rows = [];
+  for (let k = 0; k < items.length;) {
+    if (items[k].op === 'same') { rows.push({ kind: 'same', text: items[k++].text }); continue; }
+    const dels = [];
+    const adds = [];
+    while (k < items.length && items[k].op !== 'same') {
+      const item = items[k++];
+      if (item.text.trim()) (item.op === 'del' ? dels : adds).push(item.text);  // blank lines don't count as changes
+    }
+    const pairs = Math.min(dels.length, adds.length);
+    for (let n = 0; n < Math.max(dels.length, adds.length); n++) {
+      const html = n < pairs ? wordChange(dels[n], adds[n]) : null;
+      if (html !== null) rows.push({ kind: 'change', html });
+      else {
+        if (n < dels.length) rows.push({ kind: 'del', text: dels[n] });
+        if (n < adds.length) rows.push({ kind: 'add', text: adds[n] });
+      }
+    }
+  }
+  const changed = rows.filter((x) => x.kind === 'change').length;
+  const added = rows.filter((x) => x.kind === 'add' && x.text.trim()).length;
+  const removed = rows.filter((x) => x.kind === 'del' && x.text.trim()).length;
+  const summary = changed + added + removed === 0
+    ? `No changes since step ${stepOf(beforeRound.index)}.`
+    : `Since step ${stepOf(beforeRound.index)}: ${[changed && `${plural(changed, 'line')} changed`, added && `${added} added`,
+      removed && `${removed} removed`].filter(Boolean).join(', ')}.`;
+  // Unchanged stretches fold to the two lines on either side of a change.
+  const near = new Set();
+  rows.forEach((row, n) => {
+    if (row.kind !== 'same') for (let m = n - 2; m <= n + 2; m++) near.add(m);
+  });
+  const out = [];
+  let hidden = 0;
+  rows.forEach((row, n) => {
+    if (row.kind === 'same' && (!near.has(n) || !row.text.trim())) {
+      if (row.text.trim()) hidden++;
+      return;
+    }
+    if (hidden) out.push(el('div', { class: 'gap' }, `… ${plural(hidden, 'unchanged line')}`));
+    hidden = 0;
+    out.push(row.kind === 'change' ? el('div', { class: 'row change', html: row.html })
+      : el('div', { class: `row ${row.kind}` }, row.text || ' '));
+  });
+  if (hidden) out.push(el('div', { class: 'gap' }, `… ${plural(hidden, 'unchanged line')}`));
+  return el('div', { class: 'diff' }, el('div', { class: 'diff-summary' }, summary), out);
 }
 
 // A reply's actions (files read, commands run) are hidden until asked for.
