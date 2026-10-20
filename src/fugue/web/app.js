@@ -1687,10 +1687,16 @@ function memberRow(index, chosen, onchange, onremove = null) {
   const picker = el('span', { class: 'picker' });
   const args = el('input', { type: 'text', class: 'args', value: chosen.args || '', spellcheck: 'false' });
   const commands = { claude: 'claude -p', codex: 'codex exec', dsh: 'dsh --profile headless' };
+  // Said next to the member it concerns, so a tool you don't use never warns.
+  const missing = el('div', { class: 'missing warn-text' });
   const drawPicker = (current) => {
     const t = tool.value;
     args.placeholder = `extra arguments for ${commands[t]}`;
     picker.replaceChildren(S.models ? modelPicker(t, current) : el('span', { class: 'muted' }, 'default model and effort'));
+    const found = !(S.info && S.info.agents[t] === false);
+    missing.hidden = found;
+    missing.textContent = found ? '' : `fugue can't find the ${commands[t].split(' ')[0]} command on this Mac, so this member can't run. `
+      + 'Settings shows where fugue looked.';
   };
   tool.addEventListener('change', () => { drawPicker({}); onchange(); });
   row.addEventListener('change', onchange);
@@ -1698,7 +1704,7 @@ function memberRow(index, chosen, onchange, onremove = null) {
   drawPicker(chosen);
   row.append(
     el('span', { class: 'member-num' }, `Member ${index + 1}`),
-    el('div', { class: 'member-body' }, tool, picker, args),
+    el('div', { class: 'member-body' }, tool, picker, args, missing),
     onremove ? el('button', { type: 'button', class: 'link remove', title: 'Remove this member', onclick: onremove }, 'Remove') : '');
   row.read = () => {
     const modelChoice = row.querySelector('select.model');
@@ -1829,7 +1835,6 @@ async function showNewQuestion() {
   ]);
   const defaults = settings ? settings.defaults : null;
   const saved = prefs();
-  const missing = TOOLS.filter((t) => S.info && !S.info.agents[t]);
   const cwdDefault = saved.cwd || folders.recent[0] || folders.default;
   // Everything but the folder starts from the defaults on the Settings page,
   // including the members, so what the form shows is what runs.
@@ -1899,9 +1904,6 @@ async function showNewQuestion() {
   const picker = filePicker({ target: question });
   const form = el('form', { class: 'form new-question', onsubmit: (e) => { e.preventDefault(); start(form); } },
     el('h1', {}, navToggle(), 'New question'),
-    missing.length
-      ? el('div', { class: 'warning' }, `The server can't find the ${missing.join(' and ')} command on its PATH, so members can't use it.`)
-      : null,
     question,
     el('div', { class: 'attach-row' },
       el('button', { type: 'button', class: 'link accent', onclick: () => picker.open() }, 'Attach files'),

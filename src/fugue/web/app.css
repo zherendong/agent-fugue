@@ -576,6 +576,7 @@ button.link:hover { color: var(--text); }
 .form .member-row select.model { min-width: 210px; }
 .form .member-row input.model-other { width: 200px; }
 .form .member-row input.args { flex: 1 1 100%; font-family: var(--mono); font-size: 12.5px; }
+.form .member-row .missing { flex: 1 1 100%; font-size: 12.5px; }
 .form .model-row { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .form .member-list { display: flex; flex-direction: column; gap: 8px; }
 .form .member-row { grid-template-columns: 74px 1fr auto; }
