@@ -168,6 +168,8 @@ def test_notes_requests_and_controls(server):
     assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Hi", "to": "codex"})[0] == 400
     assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Mind the latency.", "to": codex})[0] == 200
     assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Withdraw me", "to": "both"})[0] == 200
+    # The same note again (a double click) is kept once.
+    assert call(server, "POST", f"/api/discussions/{ident}/notes", {"text": "Mind the latency.", "to": codex})[0] == 200
     _, data = call(server, "GET", f"/api/discussions/{ident}")
     assert len(data["inbox"]["notes"][codex]) == 2 and len(data["inbox"]["notes"][claude]) == 1
     assert call(server, "DELETE", f"/api/discussions/{ident}/notes", {"member": claude, "index": 0})[0] == 200
@@ -201,6 +203,12 @@ def test_notes_requests_and_controls(server):
     data = wait_for_phase(server, ident, {"finished"})
     # One more round of comments; without pausing, its update follows.
     assert [r["kind"] for r in data["rounds"]][-2:] == ["comment", "update"] and len(data["rounds"]) == 8
+
+    # Raising the round limit doesn't start the members by itself; continuing does.
+    assert call(server, "POST", f"/api/discussions/{ident}/control", {"max_rounds": 3})[0] == 200
+    time.sleep(0.5)
+    _, data = call(server, "GET", f"/api/discussions/{ident}")
+    assert data["status"]["phase"] == "ready" and len(data["rounds"]) == 8
 
 
 def test_models_and_efforts(server):

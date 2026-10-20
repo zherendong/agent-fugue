@@ -990,8 +990,37 @@ async function deleteDiscussion(d) {
   location.hash = S.list.length ? `#/d/${S.list[0].id}` : '#/new';
 }
 
+// The bar's buttons take one action at a time: a second click before the
+// first has taken effect would queue a second round of agents.
 function button(text, onclick, kind = '', title = null) {
-  return el('button', { class: `btn small ${kind}`, type: 'button', onclick, title }, text);
+  return el('button', {
+    class: `btn small ${kind}`,
+    type: 'button',
+    title,
+    disabled: barBusy(),
+    onclick: async () => {
+      if (barBusy()) return;
+      S.busy = true;
+      drawBar(S.detail);
+      try {
+        await onclick();
+      } finally {
+        S.busy = false;
+        if (S.detail) drawBar(S.detail);
+      }
+    },
+  }, text);
+}
+
+// Busy while an action is on its way, and after one that moves the discussion
+// on, until the page has seen it move (or a few seconds have passed).
+function barBusy() {
+  return S.busy || (S.moved && Date.now() - S.moved.at < 4000 && S.detail && S.detail.status.label === S.moved.label);
+}
+
+function moved() {
+  S.moved = { at: Date.now(), label: S.detail && S.detail.status.label };
+  setTimeout(() => { if (S.detail) drawBar(S.detail); }, 4100);
 }
 
 function path(...parts) {
@@ -1006,11 +1035,15 @@ function follow() {
 
 const control = (changes) => attempt(async () => {
   await api('POST', path('control'), changes);
-  if (changes.paused === false) follow();
+  if (changes.paused === false) {
+    moved();
+    follow();
+  }
   refreshSoon();
 });
 const request = (body) => attempt(async () => {
   await api('POST', path('requests'), body);
+  moved();
   follow();
   refreshSoon();
 });
@@ -1607,6 +1640,7 @@ function barActions(d) {
     'Attach files to the follow-up question');
   const askButton = button('Ask', async () => {
     if (needText('the question') && await submitText()) {
+      moved();
       follow();
       refreshSoon();
     }
@@ -2037,10 +2071,11 @@ async function showNewQuestion() {
     required: true,
     'aria-label': 'Question',
     placeholder: 'Your question for the members. Drop or paste files here to attach them.',
-    onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); } },
+    onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); start(form); } },
   });
   const picker = filePicker({ target: question });
-  const form = el('form', { class: 'form new-question', onsubmit: (e) => { e.preventDefault(); start(form); } },
+  // No submit button, so Enter in a one-line field (the folder, a model id) doesn't start the members; Ask and ⌘↩ do.
+  const form = el('form', { class: 'form new-question', onsubmit: (e) => e.preventDefault() },
     el('h1', {}, navToggle(), 'New question'),
     // Said once, to someone who hasn't asked anything yet.
     S.list.length ? null : el('p', { class: 'intro' },
@@ -2059,7 +2094,7 @@ async function showNewQuestion() {
     el('div', { class: 'setup-summary' }, summary, change),
     options,
     el('div', { class: 'submit' },
-      el('button', { class: 'btn primary', type: 'submit' }, 'Ask'),
+      el('button', { class: 'btn primary', type: 'button', onclick: () => start(form) }, 'Ask'),
       el('span', { class: 'muted' }, '⌘↩')));
   form.picker = picker;
   $('#content').replaceChildren(form);
@@ -2073,8 +2108,15 @@ async function showNewQuestion() {
 }
 
 async function start(form) {
+  if (form.starting) return;  // ⌘↩ twice, or ⌘↩ while the files upload
   const data = Object.fromEntries(new FormData(form));
-  const submit = form.querySelector('button[type="submit"]');
+  if (!data.question.trim()) {
+    $('#q').focus();
+    toast('Write the question first.');
+    return;
+  }
+  form.starting = true;
+  const submit = form.querySelector('.submit .btn.primary');
   submit.disabled = true;
   if (data.cwd.trim()) prefs({ cwd: data.cwd });
   const created = await attempt(async () => api('POST', '/api/discussions', {
@@ -2088,6 +2130,7 @@ async function start(form) {
     timeout_minutes: data.timeout ? Number(data.timeout) : null,
   }));
   submit.disabled = false;
+  form.starting = false;
   if (!created) return;
   await refreshList();
   location.hash = `#/d/${created.id}`;

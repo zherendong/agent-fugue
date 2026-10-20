@@ -326,7 +326,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadRequest("The note is empty.")
             if to != "both" and to not in discussion.members:
                 raise BadRequest(f"`to` must be both or a member's letter ({', '.join(discussion.members)}).")
-            discussion.add_note(text, list(discussion.members) if to == "both" else [to])
+            letters = list(discussion.members) if to == "both" else [to]
+            # The same note twice (a double click) is kept once.
+            waiting = discussion.read_inbox()["notes"]
+            if not all(any(note["text"] == text for note in waiting.get(letter, [])) for letter in letters):
+                discussion.add_note(text, letters)
             return self._json({"ok": True})
         if action == "notes" and method == "DELETE":
             body = self._body()
@@ -409,7 +413,9 @@ class Handler(BaseHTTPRequestHandler):
     def _control(self, discussion: Discussion, body: dict) -> None:
         changes = {key: _checked(key, value) for key, value in body.items()}
         control = discussion.update_control(**changes)
-        self.app.kick(discussion.id)
+        # Only continuing starts the members; a running discussion reads the other changes between rounds.
+        if changes.get("paused") is False:
+            self.app.kick(discussion.id)
         self._json(control)
 
     def _request(self, discussion: Discussion, body: dict) -> None:
@@ -425,11 +431,17 @@ class Handler(BaseHTTPRequestHandler):
             if not question:
                 raise BadRequest("The question is empty.")
             request = {"type": "ask", "question": question}
-            files = _uploads(body.get("attachments"))
-            if files:
-                request["attachments"] = discussion.attach(files)
         else:
             raise BadRequest("`type` must be next, ask or revote.")
+        files = _uploads(body.get("attachments")) if kind == "ask" else []
+        # The same request twice in a row (a double click) is kept once.
+        waiting = discussion.read_inbox()["requests"]
+        last = waiting[-1] if waiting else None
+        if (last and last["type"] == kind and last.get("question") == request.get("question")
+                and bool(last.get("attachments")) == bool(files)):
+            return self._json(last, HTTPStatus.CREATED)
+        if files:
+            request["attachments"] = discussion.attach(files)
         request = discussion.add_request(request)
         if kind in ("ask", "revote"):  # run it through to the next place the discussion pauses
             discussion.update_control(paused=False)
