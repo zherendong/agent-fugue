@@ -10,6 +10,21 @@ import json, os, sys, time, uuid
 def out(obj):
     print(json.dumps(obj), flush=True)
 
+
+def council_lines(prompt):
+    """What a council round asks for: a ranking in a vote, the starting point in a review.
+    FAKE_PREFER (e.g. "B,C,A") orders the ranking; without it, the order the answers came in."""
+    import re
+    out = ""
+    if "Ranking: <" in prompt and not os.environ.get("FAKE_NO_RANKING"):
+        given = re.findall(r'<answer from="member ([A-D])"', prompt)
+        prefer = [x for x in os.environ.get("FAKE_PREFER", "").split(",") if x]
+        given.sort(key=lambda x: prefer.index(x) if x in prefer else len(prefer))
+        out += "\nRanking: " + ", ".join(given)
+    if "Starting point: <keep or change>" in prompt:
+        out += "\nStarting point: " + os.environ.get("FAKE_STARTING_POINT", "keep")
+    return out
+
 args = sys.argv[1:]
 if args == ["--version"]:
     print("codex-cli 9.9.9")
@@ -51,6 +66,7 @@ if os.environ.get("FAKE_CODEX_FAIL") == "1":
 
 remaining = os.environ.get("FAKE_OBJECTIONS", "1")
 reply = f"Codex reply number {calls}. Session {session[:8]}.\n\n| Option | Verdict |\n|---|---|\n| Cache in memory | **yes** |\n\n**Objections: {remaining}**"
+reply += council_lines(prompt)
 with open(out_file, "w") as f:
     f.write(reply)
 out({"type": "item.completed", "item": {"id": "item_2", "type": "agent_message", "text": reply}})

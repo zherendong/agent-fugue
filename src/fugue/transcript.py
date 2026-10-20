@@ -10,6 +10,10 @@ from .store import Discussion
 
 ROUND_LABELS = {
     "answer": "independent answers",
+    # A council of three or four.
+    "vote": "each votes for the best answer to start from",
+    "merge": "the chosen member merges the others' points",
+    "revise": "the chosen member revises the answer",
     "comment": "each comments on the other's answer",
     "update": "each updates their answer",
     # Kinds from discussions made by earlier versions of fugue.
@@ -37,7 +41,19 @@ def demote_headings(text: str, levels: int = 3) -> str:
     return "\n".join(out)
 
 
+COUNCIL_REVIEW_LABEL = "the others review the answer"
+
+
 def entry_heading(kind: str, discussion: Discussion, letter: str) -> str:
+    if len(discussion.members) > 2:
+        name = discussion.name(letter)
+        return {
+            "answer": name,
+            "vote": f"{name}'s vote",
+            "merge": f"{name} merges the others' points into its answer",
+            "review": f"{name}'s review",
+            "revise": f"{name}'s revised answer",
+        }[kind]
     other_letter = discussion.other(letter)
     # Two members can have the same name (same tool, model and effort); then the letter tells them apart.
     same = discussion.name(letter, with_letter=False) == discussion.name(other_letter, with_letter=False)
@@ -60,10 +76,25 @@ def resume_command(discussion: Discussion, letter: str, session_id: str) -> str:
     return f"cd {folder} && codex resume {session_id}"
 
 
-def round_heading(rnd: dict) -> str:
+def round_heading(rnd: dict, in_council: bool = False) -> str:
+    if rnd["kind"] == "answer" and rnd.get("reopen"):
+        return f"Round {rnd['index']}: everyone answers again, for a new vote"
     if rnd["kind"] == "answer" and rnd["index"] > 0:
         return f"Round {rnd['index']}: follow-up question, independent answers"
+    if rnd["kind"] == "review" and in_council:
+        return f"Round {rnd['index']}: {COUNCIL_REVIEW_LABEL}"
     return f"Round {rnd['index']}: {ROUND_LABELS[rnd['kind']]}"
+
+
+def vote_summary(rnd: dict) -> str:
+    """One line on how a council's vote came out."""
+    vote = rnd.get("vote")
+    if not vote:
+        return ""
+    points = ", ".join(f"member {letter} {count}" for letter, count in
+                       sorted(vote["points"].items(), key=lambda item: -item[1]))
+    return (f"Points: {points}. Starting point: member {vote['chosen']}'s answer, {vote['chosen_by']} "
+            f"({vote['valid']} of {len(rnd['entries'])} ballots counted).")
 
 
 def _quote(text: str) -> str:
@@ -88,10 +119,13 @@ def render(discussion: Discussion) -> str:
         lines.append("")
     lines += ["## Question", "", state["question"].strip(), ""]
 
+    in_council = len(discussion.members) > 2
     for rnd in discussion.rounds:
-        lines += ["---", "", f"## {round_heading(rnd)}", ""]
-        if rnd["kind"] == "answer" and rnd["index"] > 0:
+        lines += ["---", "", f"## {round_heading(rnd, in_council)}", ""]
+        if rnd["kind"] == "answer" and rnd["index"] > 0 and not rnd.get("reopen"):
             lines += [_quote(rnd["question"]), ""]
+        if rnd.get("vote"):
+            lines += [vote_summary(rnd), ""]
         for letter in discussion.members:
             entry = rnd["entries"].get(letter)
             if entry is None:

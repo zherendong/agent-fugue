@@ -84,7 +84,7 @@ def fugue(*args: str) -> int:
 
 def without_forwarded(prompt: str) -> str:
     """fugue's own words in a prompt, without the other member's forwarded replies."""
-    return re.sub(r"<(answer|comments|message) [^>]*>[\s\S]*?</\1>", "", prompt)
+    return re.sub(r"<(answer|comments|message|ballot) [^>]*>[\s\S]*?</\1>", "", prompt)
 
 
 def test_it_pauses_after_every_round_by_default(env):
@@ -495,9 +495,11 @@ def test_dsh_status_finds_a_key_without_reading_it(env, monkeypatch):
     assert report["version"] == "0.2.0-rc.2"
 
 
-def test_members_must_be_given_twice_with_known_tools(env, capsys):
+def test_members_must_be_given_two_to_four_times_with_known_tools(env, capsys):
     assert fugue("start", "Q?", "-q", "--member", "codex") == 1
-    assert "Give --member twice" in capsys.readouterr().err
+    assert "Give --member two to 4 times" in capsys.readouterr().err
+    assert fugue("start", "Q?", "-q", *["--member", "codex"] * 5) == 1
+    assert "Give --member two to 4 times" in capsys.readouterr().err
     assert fugue("start", "Q?", "-q", "--member", "gemini", "--member", "codex") == 1
     assert "must be one of: claude, codex" in capsys.readouterr().err
     assert list_discussions() == []
@@ -622,7 +624,7 @@ def test_settings_are_saved_to_the_config_file_and_used(env):
     with pytest.raises(Exception, match="doesn't take effort"):
         save_defaults({**saved, "members": [{"tool": "codex", "model": "gpt-test-small", "effort": "ultra"},
                                             {"tool": "claude"}]})
-    with pytest.raises(Exception, match="two members"):
+    with pytest.raises(Exception, match="two to 4 members"):
         save_defaults({**saved, "members": [{"tool": "codex"}]})
 
 
@@ -663,3 +665,128 @@ def test_parse_objections():
 def test_demote_headings_skips_code_blocks():
     text = "# Title\n\n```\n# a shell comment\n```\n## Sub"
     assert demote_headings(text) == "#### Title\n\n```\n# a shell comment\n```\n##### Sub"
+
+
+# ---------------------------------------------------------------------------
+# A council of three or four members: vote, merge, review, revise
+
+
+COUNCIL = ("--member", "claude", "--member", "codex", "--member", "dsh")
+
+
+def round_letters(rnd: dict) -> list[str]:
+    return sorted(rnd["entries"])
+
+
+def test_a_council_votes_merges_reviews_and_revises(env, monkeypatch):
+    monkeypatch.setenv("FAKE_PREFER", "B,C,A")
+    assert fugue("start", "Q?", "-n", "1", "--no-pause", "-q", *COUNCIL) == 0
+    discussion = latest()
+    assert sorted(discussion.members) == ["A", "B", "C"]
+    assert kinds(discussion) == ["answer", "vote", "merge", "review", "revise", "review"]
+    answer, vote, merge, review, revise, last = discussion.rounds
+    # Everyone votes on the others' answers, never their own, each in its own order.
+    for voter, entry in vote["entries"].items():
+        assert sorted(entry["candidates"]) == sorted(set("ABC") - {voter})
+        prompt = discussion.prompt_path(vote["index"], voter).read_text()
+        assert f'<answer from="member {voter}"' not in prompt
+        assert all(f'<answer from="member {other}" round="0">' in prompt for other in entry["candidates"])
+        assert "Ranking: <their letters" in prompt
+    # B is ranked first by A and C, so B's answer is the starting point.
+    assert vote["vote"]["points"] == {"A": 0, "B": 2, "C": 1}
+    assert vote["vote"]["chosen"] == "B" and vote["vote"]["chosen_by"] == "by vote" and vote["vote"]["valid"] == 3
+    # B merges, reading the other ballots; A and C review; B revises from their reviews.
+    assert round_letters(merge) == ["B"] and round_letters(review) == ["A", "C"] and round_letters(revise) == ["B"]
+    merge_prompt = discussion.prompt_path(merge["index"], "B").read_text()
+    assert '<ballot from="member A" round="1">' in merge_prompt and '<ballot from="member C" round="1">' in merge_prompt
+    assert "points from other members' answers that you did not take" in merge_prompt
+    review_prompt = discussion.prompt_path(review["index"], "A").read_text()
+    assert '<answer from="member B" round="2">' in review_prompt and "Starting point: <keep or change>" in review_prompt
+    assert "You are member A of a council of 3: members A, B and C." in review_prompt
+    assert review["entries"]["A"]["objections"] == 1 and review["entries"]["A"]["starting_point"] == "keep"
+    revise_prompt = discussion.prompt_path(revise["index"], "B").read_text()
+    assert '<comments from="member A" round="3">' in revise_prompt and '<comments from="member C" round="3">' in revise_prompt
+    later_review = discussion.prompt_path(last["index"], "C").read_text()
+    assert '<answer from="member B" round="4">' in later_review and "turned down one of your earlier objections" in later_review
+    # The members only ever see letters.
+    for call in calls(env):
+        own_words = without_forwarded(call["prompt"])
+        assert not any(name in own_words for name in ("Claude", "Codex", "DeepSeek")), own_words
+    # B's session goes on from its answer to its merge and revision.
+    b_tool = discussion.members["B"]["tool"]
+    b_sessions = {c["session"] for c in calls(env) if c["agent"] == b_tool}
+    assert len(b_sessions) == 1
+    status = engine.describe(discussion)
+    assert status["label"] == "Finished at the round limit" and "Objections still open after round 5" in status["detail"]
+    text = discussion.transcript_path.read_text()
+    assert "Round 1: each votes for the best answer to start from" in text
+    assert "Starting point: member B's answer, by vote (3 of 3 ballots counted)." in text
+
+
+def test_a_council_pauses_after_the_vote_and_after_each_revision(env, monkeypatch):
+    from fugue import council
+
+    monkeypatch.setenv("FAKE_PREFER", "B,C,A")
+    assert fugue("start", "Q?", "-q", *COUNCIL) == 0
+    discussion = latest()
+    assert kinds(discussion) == ["answer", "vote"]
+    status = engine.describe(discussion)
+    assert status["phase"] == "paused" and status["next"] == "member B merges the others' points into its answer"
+    # You can start from another answer than the vote chose, before the merge.
+    council.choose_editor(discussion, "C")
+    assert discussion.rounds[1]["vote"]["chosen_by"] == "by you"
+    assert engine.describe(latest())["next"] == "member C merges the others' points into its answer"
+    assert fugue("continue", "-q") == 0
+    discussion = latest()
+    assert kinds(discussion) == ["answer", "vote", "merge", "review", "revise"]
+    assert round_letters(discussion.rounds[2]) == ["C"] and round_letters(discussion.rounds[3]) == ["A", "B"]
+    with pytest.raises(Exception, match="only right after a vote"):
+        council.choose_editor(discussion, "A")
+
+
+def test_a_council_stops_when_no_reviewer_objects(env, monkeypatch):
+    monkeypatch.setenv("FAKE_OBJECTIONS", "0")
+    assert fugue("start", "Q?", "--no-pause", "-q", *COUNCIL) == 0
+    discussion = latest()
+    assert kinds(discussion) == ["answer", "vote", "merge", "review"]
+    assert engine.describe(discussion)["label"] == "Agreed in round 3"
+
+
+def test_a_council_votes_again_once_when_reviewers_want_another_start(env, monkeypatch):
+    monkeypatch.setenv("FAKE_STARTING_POINT", "change")
+    assert fugue("start", "Q?", "-n", "1", "--no-pause", "-q", *COUNCIL) == 0
+    discussion = latest()
+    assert kinds(discussion) == ["answer", "vote", "merge", "review", "answer", "vote", "merge", "review", "revise",
+                                 "review"]
+    again = discussion.rounds[4]
+    assert again.get("reopen") and round_letters(again) == ["A", "B", "C"]
+    prompt = discussion.prompt_path(4, "A").read_text()
+    assert "the council will vote again" in prompt and "Write your own best answer" in prompt
+    # The second vote is on the new answers.
+    vote = discussion.rounds[5]
+    assert all(f'round="4"' in discussion.prompt_path(5, voter).read_text() for voter in vote["entries"])
+
+
+def test_a_council_with_unreadable_ballots_draws_the_starting_point(env, monkeypatch):
+    monkeypatch.setenv("FAKE_NO_RANKING", "1")
+    assert fugue("start", "Q?", "-q", *COUNCIL) == 0
+    vote = latest().rounds[1]
+    assert vote["vote"]["valid"] == 0 and vote["vote"]["chosen_by"].startswith("drawn at random")
+    assert all(entry["ballot_problem"] == "no Ranking line at the end" for entry in vote["entries"].values())
+
+
+def test_rankings_and_ties():
+    from fugue.council import parse_ranking, parse_starting_point, tally
+
+    assert parse_ranking("text\n\nRanking: C, B", ["B", "C"]) == (["C", "B"], None)
+    assert parse_ranking("text\n**Ranking:** member B > member C", ["B", "C"]) == (["B", "C"], None)
+    assert parse_ranking("Ranking: B", ["B", "C"]) == (None, "ranked B instead of B and C")
+    assert parse_starting_point("x\nObjections: 2\nStarting point: **Change**") == "change"
+
+    class Fake:
+        id = "x"
+    ballots = {"A": ["B", "C"], "B": ["A", "C"], "C": ["A", "B"], "D": ["B", "A"]}
+    rnd = {"index": 1, "entries": {v: {"ranking": r} for v, r in ballots.items()}}
+    result = tally(Fake(), rnd)
+    assert result["points"] == {"A": 2, "B": 2, "C": 0, "D": 0}
+    assert result["chosen"] in ("A", "B") and result["chosen_by"] == "drawn at random between A and B, who tied"

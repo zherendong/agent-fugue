@@ -12,6 +12,21 @@ import json, os, sys, time, uuid
 def out(obj):
     print(json.dumps(obj), flush=True)
 
+
+def council_lines(prompt):
+    """What a council round asks for: a ranking in a vote, the starting point in a review.
+    FAKE_PREFER (e.g. "B,C,A") orders the ranking; without it, the order the answers came in."""
+    import re
+    out = ""
+    if "Ranking: <" in prompt and not os.environ.get("FAKE_NO_RANKING"):
+        given = re.findall(r'<answer from="member ([A-D])"', prompt)
+        prefer = [x for x in os.environ.get("FAKE_PREFER", "").split(",") if x]
+        given.sort(key=lambda x: prefer.index(x) if x in prefer else len(prefer))
+        out += "\nRanking: " + ", ".join(given)
+    if "Starting point: <keep or change>" in prompt:
+        out += "\nStarting point: " + os.environ.get("FAKE_STARTING_POINT", "keep")
+    return out
+
 args = sys.argv[1:]
 if args == ["--version"]:
     print("0.2.0-rc.2")
@@ -41,6 +56,7 @@ if os.environ.get("FAKE_DSH_FAIL") == "1":
 
 remaining = os.environ.get("FAKE_OBJECTIONS", "1")
 reply = f"DeepSeek reply number {calls}. Session {session[8:16]}.\n\nSome analysis.\n\nObjections: {remaining}"
+reply += council_lines(prompt)
 out({"type": "status", "phase": "step_start", "turn": 1, "step": 2})
 out({"type": "text", "text": reply})
 out({"type": "status", "phase": "step_end", "turn": 1, "step": 2, "usage": {"inputTokens": 300, "outputTokens": 40}})

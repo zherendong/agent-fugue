@@ -8,9 +8,9 @@ import threading
 import time
 from typing import Callable
 
-from . import transcript
+from . import council, transcript
 from .agents import DSH_ENV, AgentCall, claude_command, codex_command, dsh_command, dsh_overlay, find_binary
-from .prompts import build_prompt
+from .prompts import build_prompt, join_letters
 from .store import TOOL_NAMES, Discussion, FugueError, now_iso
 from .streams import ClaudeStream, CodexStream, DshStream, Outcome
 
@@ -53,7 +53,9 @@ def unseen(discussion: Discussion, agent: str, before: int) -> list[int]:
 
 
 def agreed(rnd: dict) -> bool:
-    """True when, in a comment round, no member objects to any other member's answer."""
+    """True when, in a comment round (or a council's review), no member objects to the answer it read."""
+    if rnd["kind"] == "review":
+        return council.agreed(rnd)
     entries = rnd["entries"]
     return (
         rnd["kind"] == "comment"
@@ -162,8 +164,9 @@ def _record(discussion: Discussion, rnd: dict, call: AgentCall) -> None:
     discussion.reply_path(rnd["index"], call.agent).write_text(outcome.reply.rstrip() + "\n")
     entry["status"] = "done"
     entry.pop("error", None)
-    if rnd["kind"] == "comment":
+    if rnd["kind"] in ("comment", "review"):
         entry["objections"] = parse_objections(outcome.reply)
+    council.record(discussion, rnd, call.agent, outcome.reply)
     if outcome.cost_usd is not None:
         entry["cost_usd"] = outcome.cost_usd
     if outcome.tokens is not None:
@@ -289,6 +292,9 @@ def plan(state: dict, control: dict, requests: list[dict]) -> dict | None:
         return {"action": requests[0]["type"], "request": requests[0]}
     if control["paused"]:
         return None
+    if council.is_council(state.get("members", {})):
+        kind = council.automatic_kind(rounds, control)
+        return {"action": "next", "kind": kind} if kind else None
     return automatic_step(rounds, control)
 
 
@@ -304,12 +310,16 @@ STEP_LABELS = {
 }
 
 
-def step_label(rounds: list[dict], step: dict | None) -> str | None:
+def step_label(rounds: list[dict], step: dict | None, in_council: bool = False) -> str | None:
     """Say in plain words what a planned step will do."""
     if step is None:
         return None
     if step["action"] == "retry":
-        return f"retry round {rounds[-1]['index']} for the agents that didn't finish"
+        return f"retry round {rounds[-1]['index']} for the members that didn't finish"
+    if in_council and step["action"] == "revote":
+        return council.step_label(rounds, "reopen")
+    if in_council and step["action"] == "next":
+        return council.step_label(rounds, step.get("kind") or council.NATURAL_NEXT[rounds[-1]["kind"]])
     if step["action"] == "next":
         return STEP_LABELS[NEXT_KIND[rounds[-1]["kind"]]]
     return STEP_LABELS.get(step["action"], step["action"])
@@ -330,19 +340,20 @@ def describe(discussion: Discussion) -> dict:
     last = rounds[-1] if rounds else None
     control = discussion.read_control()
     requests = discussion.read_inbox()["requests"]
+    in_council = council.is_council(discussion.members)
     # What "continue" would do, paused or not.
-    next_step = step_label(rounds, plan(state, {**control, "paused": False}, requests))
+    next_step = step_label(rounds, plan(state, {**control, "paused": False}, requests), in_council)
     if discussion.runner_pid() is not None:
         working = [short_name(discussion, a) for a, e in (last or {"entries": {}})["entries"].items()
                    if e["status"] == "running"]
-        label = f"Round {last['index']}: {' and '.join(working)} working" if working else "Running"
+        label = f"Round {last['index']}: {join_letters(working)} working" if working else "Running"
         return {"phase": "running", "label": label, "needs_you": False, "next": next_step}
     if last and not is_complete(last):
         failed = {a: e["error"] for a, e in last["entries"].items()
                   if e["status"] == "failed" and e.get("error") not in (None, "stopped", "interrupted")}
         label = f"Stopped in round {last['index']}"
         if failed:
-            label += f": {' and '.join(short_name(discussion, a) for a in failed)} failed"
+            label += f": {join_letters([short_name(discussion, a) for a in failed])} failed"
         detail = "; ".join(f"{discussion.name(a)}: {error}" for a, error in failed.items())
         return {"phase": "stopped", "label": label, "detail": detail, "needs_you": True, "next": next_step}
     if plan(state, control, requests) is not None:
@@ -352,7 +363,8 @@ def describe(discussion: Discussion) -> dict:
         return {"phase": "paused", "label": label, "needs_you": True, "next": next_step}
     if last and agreed(last):
         return {"phase": "finished", "label": f"Agreed in round {last['index']}", "needs_you": False, "next": None}
-    comments = [rnd for rnd in current_question(rounds) if rnd["kind"] == "comment"]
+    comments = [rnd for rnd in current_question(rounds)
+                if rnd["kind"] == "comment" or (in_council and rnd["kind"] == "review")]
     detail = ""
     if comments:
         counts = ", ".join(f"{discussion.name(a)} {e.get('objections') if e.get('objections') is not None else '?'}"
@@ -431,6 +443,8 @@ class Runner:
                 try:
                     rnd = self._execute(discussion, step)
                 except FugueError as exc:
+                    # Pause, so the runner doesn't try the same step again and again.
+                    discussion.update_control(paused=True)
                     discussion.emit({"type": "notice", "level": "error", "text": str(exc)})
                     break
                 finally:
@@ -440,8 +454,11 @@ class Runner:
                     break
                 if agreed(rnd):
                     discussion.emit({"type": "notice", "level": "info",
-                                     "text": "No objections on either side: the members agree."})
-                if discussion.read_control()["pause_after_each_round"]:
+                                     "text": "No reviewer objects: the council agrees." if rnd["kind"] == "review"
+                                     else "No objections on either side: the members agree."})
+                # A council pauses only after its vote and after each revision.
+                if discussion.read_control()["pause_after_each_round"] and (
+                        not council.is_council(discussion.members) or rnd["kind"] in council.PAUSE_AFTER):
                     discussion.update_control(paused=True)
         except KeyboardInterrupt:
             discussion.update_control(paused=True, stop_requested=False)
@@ -456,6 +473,8 @@ class Runner:
 
     def _execute(self, discussion: Discussion, step: dict) -> dict:
         action = step["action"]
+        if council.is_council(discussion.members):
+            return self._execute_council(discussion, step)
         if action == "retry":
             rnd = discussion.rounds[-1]
         elif action == "answer":
@@ -467,4 +486,27 @@ class Runner:
         else:
             raise FugueError(f"fugue no longer handles the request {action!r}; it was dropped.")
         run_round(discussion, rnd, should_stop=self._should_stop(discussion))
+        return rnd
+
+    def _execute_council(self, discussion: Discussion, step: dict) -> dict:
+        action = step["action"]
+        if action == "retry":
+            rnd = discussion.rounds[-1]
+        elif action in ("answer", "ask"):
+            question = step["question"] if action == "answer" else step["request"]["question"]
+            rnd = council.create_round(discussion, "answer", question=question)
+        elif action == "revote":
+            rnd = council.create_round(discussion, "answer", reopen=True)
+        elif action == "next":
+            kind = step.get("kind") or council.NATURAL_NEXT[discussion.rounds[-1]["kind"]]
+            if kind == "reopen":
+                rnd = council.create_round(discussion, "answer", reopen=True)
+            else:
+                rnd = council.create_round(discussion, kind)
+        else:
+            raise FugueError(f"fugue no longer handles the request {action!r}; it was dropped.")
+        run_round(discussion, rnd, should_stop=self._should_stop(discussion))
+        notice = council.finish_round(discussion, rnd)
+        if notice:
+            discussion.emit({"type": "notice", "level": "info", "text": notice})
         return rnd

@@ -27,7 +27,7 @@ from importlib import resources
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, engine, transcript
+from . import __version__, council, engine, transcript
 from .agents import find_binary
 from .store import TOOLS, Discussion, FugueError, list_discussions
 
@@ -80,7 +80,7 @@ def detail(discussion: Discussion) -> dict:
         for agent, entry in rnd["entries"].items():
             item = {key: entry.get(key) for key in
                     ("status", "error", "duration_s", "objections", "remaining", "started_at", "finished_at",
-                     "cost_usd", "tokens")}
+                     "cost_usd", "tokens", "ranking", "ballot_problem", "candidates", "starting_point")}
             item["notes"] = entry.get("notes", [])
             item["forwarded"] = entry.get("forwarded", [])
             item["heading"] = transcript.entry_heading(rnd["kind"], discussion, agent)
@@ -88,10 +88,14 @@ def detail(discussion: Discussion) -> dict:
                 item["reply"] = discussion.read_reply(rnd["index"], agent)
             entries[agent] = item
         rounds.append({"index": rnd["index"], "kind": rnd["kind"], "question": rnd.get("question"),
-                       "label": transcript.round_heading(rnd), "entries": entries})
+                       "reopen": bool(rnd.get("reopen")), "vote": rnd.get("vote"),
+                       "label": transcript.round_heading(rnd, council.is_council(discussion.members)),
+                       "entries": entries})
     return {
         **summary(discussion),
         "question": discussion.state["question"],
+        # Three or four members vote, merge and review instead of commenting side by side.
+        "council": council.is_council(discussion.members),
         "control": discussion.read_control(),
         "inbox": discussion.read_inbox(),
         "sessions": discussion.state["sessions"],
@@ -304,6 +308,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._control(discussion, self._body())
         if action == "requests" and method == "POST":
             return self._request(discussion, self._body())
+        if action == "editor" and method == "POST":
+            letter = str(self._body().get("member") or "")
+            try:
+                council.choose_editor(discussion, letter)
+            except FugueError as exc:
+                raise BadRequest(str(exc)) from None
+            return self._json({"ok": True})
         if action == "requests" and method == "DELETE" and item:
             discussion.pop_request(item)
             return self._json({"ok": True})
@@ -353,15 +364,19 @@ class Handler(BaseHTTPRequestHandler):
         kind = body.get("type")
         if kind == "next":
             request = {"type": "next"}
+        elif kind == "revote":
+            if not council.is_council(discussion.members):
+                raise BadRequest("Voting again needs a council of three or four members.")
+            request = {"type": "revote"}
         elif kind == "ask":
             question = str(body.get("question") or "").strip()
             if not question:
                 raise BadRequest("The question is empty.")
             request = {"type": "ask", "question": question}
         else:
-            raise BadRequest("`type` must be next or ask.")
+            raise BadRequest("`type` must be next, ask or revote.")
         request = discussion.add_request(request)
-        if kind == "ask":
+        if kind in ("ask", "revote"):  # run it through to the next place the discussion pauses
             discussion.update_control(paused=False)
         self.app.kick(discussion.id)
         self._json(request, HTTPStatus.CREATED)

@@ -8,7 +8,7 @@ import tomllib
 from pathlib import Path
 
 from .agents import find_binary
-from .store import DEFAULT_CONTROL, LEGACY_TOOLS, TOOLS, Discussion, FugueError
+from .store import DEFAULT_CONTROL, LEGACY_TOOLS, MAX_MEMBERS, TOOLS, Discussion, FugueError
 
 DEFAULT_TIMEOUT_MINUTES = 30
 CONTROL_KEYS = ("max_rounds", "pause_after_each_round")
@@ -66,8 +66,8 @@ def default_members(config: dict | None = None) -> list[dict]:
 
 
 def check_members(members: list[dict]) -> None:
-    if len(members) != 2:
-        raise FugueError("A discussion has two members.")
+    if not 2 <= len(members) <= MAX_MEMBERS:
+        raise FugueError(f"A discussion has two to {MAX_MEMBERS} members.")
     for tool in {member["tool"] for member in members}:
         find_binary(tool)
     if any(member["effort"] for member in members):

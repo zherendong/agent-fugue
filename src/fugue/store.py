@@ -28,7 +28,8 @@ TOOLS = ("claude", "codex", "dsh")
 # The two tools of discussions and config files from before members, and the usual line-up.
 LEGACY_TOOLS = ("claude", "codex")
 TOOL_NAMES = {"claude": "Claude", "codex": "Codex", "dsh": "DeepSeek"}
-LETTERS = "AB"
+LETTERS = "ABCD"
+MAX_MEMBERS = len(LETTERS)
 
 # How a discussion moves forward on its own. Anyone may change these at any time.
 DEFAULT_CONTROL = {

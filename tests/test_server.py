@@ -250,3 +250,39 @@ def test_bad_input(server):
     assert call(server, "POST", "/api/discussions", {"question": "Q?", "cwd": "/no/such/folder"})[0] == 400
     assert call(server, "GET", "/api/discussions/nope")[0] == 400
     assert call(server, "GET", "/api/discussions/..%2F..")[0] == 404
+
+
+def test_a_council_from_the_page(server, monkeypatch):
+    monkeypatch.setenv("FAKE_PREFER", "C,B,A")
+    status, created = call(server, "POST", "/api/discussions", {
+        "question": "Q?", "cwd": str(server["work"]),
+        "members": [{"tool": "claude"}, {"tool": "codex"}, {"tool": "dsh"}]})
+    assert status == 201
+    ident = created["id"]
+    data = wait_for_phase(server, ident, {"paused"})
+    assert data["council"] is True
+    assert [r["kind"] for r in data["rounds"]] == ["answer", "vote"]
+    vote = data["rounds"][1]
+    assert vote["vote"]["chosen"] == "C" and vote["entries"]["A"]["ranking"] == ["C", "B"]
+    assert data["status"]["next"] == "member C merges the others' points into its answer"
+    # Pick another starting point, then go on.
+    assert call(server, "POST", f"/api/discussions/{ident}/editor", {"member": "Z"})[0] == 400
+    assert call(server, "POST", f"/api/discussions/{ident}/editor", {"member": "B"})[0] == 200
+    assert call(server, "POST", f"/api/discussions/{ident}/control", {"paused": False})[0] == 200
+    time.sleep(0.5)
+    data = wait_for_phase(server, ident, {"paused"})
+    assert [r["kind"] for r in data["rounds"]] == ["answer", "vote", "merge", "review", "revise"]
+    assert list(data["rounds"][2]["entries"]) == ["B"] and data["rounds"][3]["entries"]["A"]["starting_point"] == "keep"
+    assert call(server, "POST", f"/api/discussions/{ident}/editor", {"member": "A"})[0] == 400
+    # Ask for a new vote.
+    assert call(server, "POST", f"/api/discussions/{ident}/requests", {"type": "revote"})[0] == 201
+    time.sleep(0.5)
+    data = wait_for_phase(server, ident, {"paused"})
+    assert [r["kind"] for r in data["rounds"]][5:] == ["answer", "vote"] and data["rounds"][5]["reopen"] is True
+
+
+def test_only_a_council_votes_again(server):
+    _, created = call(server, "POST", "/api/discussions", {"question": "Q?", "cwd": str(server["work"])})
+    wait_for_phase(server, created["id"], {"paused"})
+    assert call(server, "POST", f"/api/discussions/{created['id']}/requests", {"type": "revote"})[0] == 400
+    assert call(server, "POST", f"/api/discussions/{created['id']}/editor", {"member": "A"})[0] == 400

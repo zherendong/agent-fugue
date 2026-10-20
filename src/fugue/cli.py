@@ -17,7 +17,7 @@ from pathlib import Path
 from . import __version__, engine, transcript
 from .agents import format_duration
 from .config import DEFAULT_TIMEOUT_MINUTES, new_discussion
-from .store import TOOL_NAMES, TOOLS, Discussion, FugueError, list_discussions, select_discussion
+from .store import MAX_MEMBERS, TOOL_NAMES, TOOLS, Discussion, FugueError, list_discussions, select_discussion
 
 
 def err(message: str = "") -> None:
@@ -109,7 +109,7 @@ class TerminalView:
         name = self.discussion.name
         if kind == "round_started":
             self.discussion.reload()  # the runner keeps its own copy of the state
-            label = transcript.round_heading(self.discussion.rounds[event["round"]])
+            label = transcript.round_heading(self.discussion.rounds[event["round"]], len(self.discussion.members) > 2)
             self._clear()
             err(f"{label}: asking {' and '.join(name(m) for m in event['members'])}")
         elif kind == "agent_started":
@@ -177,14 +177,15 @@ def run_here(discussion: Discussion, quiet: bool) -> int:
 
 
 def parse_members(specs: list[str] | None, extra: list[str] | None) -> list[dict] | None:
-    """The members from `--member TOOL[:MODEL[:EFFORT]]` (given twice) and their `--member-args`, in order."""
+    """The members from `--member TOOL[:MODEL[:EFFORT]]` (given two to four times) and their `--member-args`, in order."""
     if not specs:
         if extra:
             raise FugueError("--member-args goes with --member; to change the saved line-up, use the "
                              "Settings page or the config file.")
         return None
-    if len(specs) != 2:
-        raise FugueError("Give --member twice, once for each member, or leave it out to use your saved line-up.")
+    if not 2 <= len(specs) <= MAX_MEMBERS:
+        raise FugueError(f"Give --member two to {MAX_MEMBERS} times, once for each member, or leave it out to use "
+                         "your saved line-up.")
     extra = extra or []
     if len(extra) > len(specs):
         raise FugueError("There are more --member-args than members.")
@@ -238,6 +239,17 @@ def cmd_ask(args: argparse.Namespace) -> int:
     discussion = select_discussion(args.discussion)
     question = read_text(args.question, args.file, "question")
     discussion.add_request({"type": "ask", "question": question})
+    discussion.update_control(paused=False)
+    return run_here(discussion, args.quiet)
+
+
+def cmd_revote(args: argparse.Namespace) -> int:
+    from .council import is_council
+
+    discussion = select_discussion(args.discussion)
+    if not is_council(discussion.members):
+        raise FugueError("Voting again needs a council of three or four members.")
+    discussion.add_request({"type": "revote"})
     discussion.update_control(paused=False)
     return run_here(discussion, args.quiet)
 
@@ -314,7 +326,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     print()
     rows = [("Round", "What", *(f"Member {letter}" for letter in letters))]
     for rnd in discussion.rounds:
-        what = transcript.round_heading(rnd).split(": ", 1)[1]
+        what = transcript.round_heading(rnd, len(discussion.members) > 2).split(": ", 1)[1]
         rows.append((str(rnd["index"]), what, *(_cell(rnd["entries"].get(letter)) for letter in letters)))
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)]
     for row in rows:
@@ -510,10 +522,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", help="short name for the discussion (default: the question's first line)")
     p.add_argument("--cwd", help="folder the agents work in (default: the current folder)")
     p.add_argument("--member", action="append", metavar="TOOL[:MODEL[:EFFORT]]",
-                   help="a member: claude or codex, optionally with a model and effort (see `fugue models`). "
-                        "Give it twice, e.g. --member claude:claude-opus-5-5:high --member codex:gpt-6.1-sol, "
-                        "or --member codex::high --member codex::low; leave out a part for the tool's own "
-                        "default. Without --member, your saved line-up is used (Settings on the page).")
+                   help="a member: claude, codex or dsh (the DeepSeek Harness), optionally with a model and effort "
+                        "(see `fugue models`). Give it two to four times, e.g. --member claude:claude-opus-5-5:high "
+                        "--member codex:gpt-6.1-sol --member dsh:deepseek-flash; leave out a part for the tool's "
+                        "own default. Two members comment on each other's answers; three or four vote for a "
+                        "starting point, which its author merges and the others review. Without --member, your "
+                        "saved line-up is used (Settings on the page).")
     p.add_argument("--member-args", action="append", metavar="ARGS",
                    help='extra arguments for the matching --member (`claude -p` or `codex exec`), in the same '
                         'order, e.g. --member-args="--add-dir ../shared"')
@@ -542,6 +556,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--to", default="both", metavar="both|A|B",
                    help="who gets the note: both, or one member's letter (default: both)")
     p.set_defaults(func=cmd_note)
+
+    p = sub.add_parser("revote", parents=[which, quiet],
+                       help="a council of three or four: everyone answers again, then votes again",
+                       description="Every member writes its own best answer again, taking in the discussion so "
+                                   "far, and the council votes again on where to start.")
+    p.set_defaults(func=cmd_revote)
 
     p = sub.add_parser("pause", parents=[which], help="pause when the current round finishes")
     p.set_defaults(func=cmd_pause)

@@ -16,7 +16,7 @@ from pathlib import Path
 from . import __version__
 from .agents import codex_switched_on, find_binary, user_temp_dir
 from .config import DEFAULT_TIMEOUT_MINUTES, config_path, default_members, load_config, normalize_member
-from .store import DEFAULT_CONTROL, LEGACY_TOOLS, TOOLS, FugueError, discussions_dir
+from .store import DEFAULT_CONTROL, LEGACY_TOOLS, MAX_MEMBERS, TOOLS, FugueError, discussions_dir
 
 
 def read_defaults() -> dict:
@@ -47,8 +47,8 @@ def save_defaults(new: dict) -> dict:
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 600:
         raise FugueError("The time limit must be between 1 and 600 minutes.")
     members = [normalize_member(member) for member in new.get("members") or []]
-    if len(members) != 2:
-        raise FugueError("A discussion has two members.")
+    if not 2 <= len(members) <= MAX_MEMBERS:
+        raise FugueError(f"A discussion has two to {MAX_MEMBERS} members.")
     if any(member["effort"] for member in members):
         known = catalog()
         for member in members:
