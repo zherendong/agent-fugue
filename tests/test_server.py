@@ -24,6 +24,7 @@ def server(tmp_path, monkeypatch):
     monkeypatch.setenv("FUGUE_CONFIG", str(tmp_path / "no-config.toml"))
     monkeypatch.setenv("FUGUE_CLAUDE_BIN", str(FAKES / "claude"))
     monkeypatch.setenv("FUGUE_CODEX_BIN", str(FAKES / "codex"))
+    monkeypatch.setenv("FUGUE_DSH_BIN", str(FAKES / "dsh"))
     monkeypatch.setenv("FAKE_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
     monkeypatch.setenv("FUGUE_TRASH", str(tmp_path / "trash"))

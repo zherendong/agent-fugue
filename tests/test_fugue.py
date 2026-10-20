@@ -30,6 +30,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("FUGUE_CONFIG", str(tmp_path / "no-config.toml"))
     monkeypatch.setenv("FUGUE_CLAUDE_BIN", str(FAKES / "claude"))
     monkeypatch.setenv("FUGUE_CODEX_BIN", str(FAKES / "codex"))
+    monkeypatch.setenv("FUGUE_DSH_BIN", str(FAKES / "dsh"))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("DSH_HOME", str(tmp_path / "user" / ".dsh"))
     monkeypatch.setenv("FAKE_LOG_DIR", str(logs))
     # A home folder of its own, so the user's real Claude and Codex settings don't leak in.
     home = tmp_path / "user"
@@ -447,6 +450,49 @@ def test_two_members_can_use_the_same_tool(env):
     assert twins.name("A") == "Claude · default model (member A)"
     text = twins.transcript_path.read_text()
     assert "Claude · default model (member A), commenting on Claude · default model (member B)'s answer" in text
+
+
+def test_a_deepseek_member_runs_read_only_and_resumes_its_session(env):
+    assert fugue("start", "Q?", "-n", "1", "--no-pause", "-q",
+                "--member", "dsh:deepseek-v4-pro:max", "--member", "claude", "--no-web") == 0
+    discussion = latest()
+    made = calls(env)
+    first, later = [c for c in made if c["agent"] == "dsh"][0], [c for c in made if c["agent"] == "dsh"][1:]
+    assert first["args"][:2] == ["--profile", "headless"] and first["args"][-2:] == ["--json", "-"]
+    assert first["permission"] == "read-only" and first["telemetry"] == "DISABLED"
+    overlay = Path(first["args"][first["args"].index("--patch") + 1]).read_text()
+    assert "model: \"deepseek-v4-pro\"" in overlay and "reasoningEffort: \"max\"" in overlay
+    assert "policy: never" in overlay and "id: web-search-deepseek" in overlay  # the web is off
+    letter = letter_of(discussion, "dsh")
+    session = discussion.state["sessions"][letter]
+    assert session.startswith("session-") and all(c["session"] == session for c in later)
+    assert all(c["args"][c["args"].index("--session-id") + 1] == session for c in later)
+    assert discussion.read_reply(0, letter).startswith("DeepSeek reply number 1.")
+    assert discussion.rounds[1]["entries"][letter]["objections"] == 1
+    assert discussion.rounds[0]["entries"][letter]["tokens"] == {"input_tokens": 500, "output_tokens": 60}
+    texts = [e["text"] for e in events(discussion) if e["type"] == "activity" and e["member"] == letter]
+    assert "grep 'cache' in src" in texts and "no matches" in texts and "Looking for the cache code first." in texts
+    assert discussion.name(letter) == f"DeepSeek (member {letter})"
+
+
+def test_a_failed_deepseek_run_says_why(env, monkeypatch):
+    monkeypatch.setenv("FAKE_DSH_FAIL", "1")
+    assert fugue("start", "Q?", "-q", "--member", "dsh", "--member", "codex") == 1
+    discussion = latest()
+    entry = discussion.rounds[0]["entries"][letter_of(discussion, "dsh")]
+    assert entry["status"] == "failed" and "simulated DeepSeek failure" in entry["error"]
+
+
+def test_dsh_status_finds_a_key_without_reading_it(env, monkeypatch):
+    from fugue.settings import agent_status
+
+    assert agent_status("dsh")["logged_in"] is False
+    home = Path(os.environ["DSH_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    (home / ".credentials.yaml").write_text("DEEPSEEK_API_KEY: sk-test\n")
+    report = agent_status("dsh")
+    assert report["logged_in"] and report["login"] == "DeepSeek API key saved in dsh" and "sk-test" not in str(report)
+    assert report["version"] == "0.2.0-rc.2"
 
 
 def test_members_must_be_given_twice_with_known_tools(env, capsys):

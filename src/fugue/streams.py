@@ -1,9 +1,9 @@
 """Turning each agent's live output into common events.
 
-Claude Code (`claude -p --output-format stream-json`) and Codex
-(`codex exec --json`) both print one JSON object per line as they work. The
-parsers here read those lines and produce the same few kinds of event for
-both agents:
+Claude Code (`claude -p --output-format stream-json`), Codex
+(`codex exec --json`) and the DeepSeek Harness (`dsh --profile headless --json`)
+all print one JSON object per line as they work. The parsers here read those
+lines and produce the same few kinds of event for every tool:
 
     {"type": "activity", "kind": "tool" | "command" | "thinking" | "error" | "info", "text": ...}
     {"type": "text_delta", "text": ...}   a piece of a message being written
@@ -234,3 +234,84 @@ class CodexStream:
                 error = f"exited with code {returncode}" if returncode else "Codex returned an empty reply"
             return Outcome(ok=False, session_id=self.session_id, error=error)
         return Outcome(ok=True, reply=reply, session_id=self.session_id, tokens=self.usage)
+
+
+class DshStream:
+    """Parser for `dsh --profile headless --json` (the DeepSeek Harness).
+
+    It prints `session`, then `status` (turn and step boundaries, with each
+    step's token usage), `thinking`, `text`, `tool_call` and `tool_result` as
+    each step is committed (not token by token), and ends with `final`, the
+    whole answer; or with `error` when the run fails outside a turn.
+    """
+
+    def __init__(self, cwd: Path):
+        self.cwd = str(cwd)
+        self.session_id: str | None = None
+        self.final: str | None = None
+        self.reason: str | None = None
+        self.errors: list[str] = []
+        self.usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def _path(self, path: str) -> str:
+        prefix = self.cwd.rstrip("/") + "/"
+        return path[len(prefix):] if path.startswith(prefix) else path
+
+    def describe_tool(self, name: str, args: dict) -> tuple[str, str]:
+        if isinstance(args.get("command"), str):
+            return "command", "$ " + _first_line(args["command"])
+        path = next((args[k] for k in ("path", "file_path", "filePath", "file") if isinstance(args.get(k), str)), None)
+        query = args.get("pattern") or args.get("query")
+        if path and query:
+            return "tool", f"{name} {_short(str(query), 80)!r} in {self._path(path)}"
+        if path:
+            return "tool", f"{name} {self._path(path)}"
+        if query:
+            return "tool", f"{name} {_short(str(query))}"
+        return "tool", f"{name} {_short(json.dumps(args, ensure_ascii=False), 120)}"
+
+    def feed(self, line: str) -> list[dict]:
+        line = line.strip()
+        if not line.startswith("{"):
+            return []
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return []
+        kind = event.get("type")
+        if kind == "session":
+            self.session_id = event.get("sessionId") or self.session_id
+        elif kind == "status":
+            if event.get("phase") == "step_end" and isinstance(event.get("usage"), dict):
+                usage = event["usage"]
+                self.usage["input_tokens"] += int(usage.get("inputTokens") or 0)
+                self.usage["output_tokens"] += int(usage.get("outputTokens") or 0)
+            elif event.get("phase") == "turn_end":
+                self.reason = event.get("reason")
+        elif kind == "thinking" and (event.get("text") or "").strip():
+            return [{"type": "activity", "kind": "thinking", "text": _first_line(event["text"])}]
+        elif kind == "text" and (event.get("text") or "").strip():
+            return [{"type": "message", "text": event["text"]}]
+        elif kind == "tool_call":
+            args = event.get("input") if isinstance(event.get("input"), dict) else {}
+            activity_kind, text = self.describe_tool(str(event.get("tool") or "tool"), args)
+            return [{"type": "activity", "kind": activity_kind, "text": text}]
+        elif kind == "tool_result" and event.get("status") == "error":
+            return [{"type": "activity", "kind": "error", "text": _first_line(event.get("result") or "tool failed")}]
+        elif kind == "final":
+            self.final = event.get("text") or ""
+        elif kind == "error":
+            message = event.get("message") or event.get("code") or "error"
+            self.errors.append(str(message))
+            return [{"type": "activity", "kind": "error", "text": _first_line(message)}]
+        return []
+
+    def outcome(self, returncode: int, stderr: str) -> Outcome:
+        reply = self.final or ""
+        if returncode != 0 or not reply.strip():
+            error = "; ".join(self.errors) or _tail(stderr)
+            if not error:
+                error = (f"exited with code {returncode}" + (f" ({self.reason})" if self.reason else "")
+                         if returncode else "DeepSeek returned an empty reply")
+            return Outcome(ok=False, session_id=self.session_id, error=error)
+        return Outcome(ok=True, reply=reply, session_id=self.session_id, tokens=dict(self.usage))

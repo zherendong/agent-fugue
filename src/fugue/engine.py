@@ -9,10 +9,10 @@ import time
 from typing import Callable
 
 from . import transcript
-from .agents import AgentCall, claude_command, codex_command, find_binary
+from .agents import DSH_ENV, AgentCall, claude_command, codex_command, dsh_command, dsh_overlay, find_binary
 from .prompts import build_prompt
 from .store import TOOL_NAMES, Discussion, FugueError, now_iso
-from .streams import ClaudeStream, CodexStream, Outcome
+from .streams import ClaudeStream, CodexStream, DshStream, Outcome
 
 # -- what each round contains
 
@@ -125,12 +125,20 @@ def _make_call(discussion: Discussion, rnd: dict, letter: str) -> AgentCall:
     session_id = discussion.state["sessions"].get(letter)
     stem = discussion.log_stem(rnd["index"], letter)
     web = settings.get("web", True)
+    env = None
     if member["tool"] == "claude":
         cmd = claude_command(find_binary("claude"), session_id=session_id, model=member.get("model"),
                              extra_args=member.get("args", []),
                              name=f"fugue: {discussion.title} (member {letter})",
                              cwd=discussion.cwd, effort=member.get("effort"), web=web)
         stream = ClaudeStream(discussion.cwd)
+    elif member["tool"] == "dsh":
+        overlay = stem.with_suffix(".dsh-patch.yml")
+        overlay.write_text(dsh_overlay(model=member.get("model"), effort=member.get("effort"), web=web))
+        cmd = dsh_command(find_binary("dsh"), session_id=session_id, overlay_file=overlay,
+                          extra_args=member.get("args", []))
+        stream = DshStream(discussion.cwd)
+        env = DSH_ENV
     else:
         reply_file = stem.with_suffix(".last-message.md")
         reply_file.unlink(missing_ok=True)
@@ -139,7 +147,7 @@ def _make_call(discussion: Discussion, rnd: dict, letter: str) -> AgentCall:
                             effort=member.get("effort"), web=web)
         stream = CodexStream(reply_file)
     return AgentCall(letter, cmd, cwd=discussion.cwd, prompt_file=discussion.prompt_path(rnd["index"], letter),
-                     log_stem=stem, timeout_s=settings["timeout_minutes"] * 60, stream=stream)
+                     log_stem=stem, timeout_s=settings["timeout_minutes"] * 60, stream=stream, env=env)
 
 
 def _record(discussion: Discussion, rnd: dict, call: AgentCall) -> None:

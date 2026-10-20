@@ -1,12 +1,13 @@
 """The models each agent can run, and the effort levels each model accepts.
 
 Codex reports its own models (`codex debug models`), so its list stays current
-by itself; fugue keeps a copy for a day. Claude Code has no such command, so
-fugue carries a short list of the current Claude models. Their effort levels
-match Anthropic's documentation.
+by itself; fugue keeps a copy for a day. Claude Code and the DeepSeek Harness
+have no such command, so fugue carries a short list of their current models:
+Claude's effort levels match Anthropic's documentation, DeepSeek's the
+harness's DeepSeek adapter (off, low, high, max).
 
 "Default" always means fugue passes nothing, so each tool uses what its own
-settings say (~/.claude/settings.json, ~/.codex/config.toml).
+settings say (~/.claude/settings.json, ~/.codex/config.toml, dsh's profile).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import tomllib
 from pathlib import Path
 
 from .agents import codex_home, find_binary
-from .store import FugueError, fugue_home
+from .store import TOOL_NAMES, FugueError, fugue_home
 
 CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 CLAUDE_MODELS = [
@@ -30,6 +31,12 @@ CLAUDE_MODELS = [
 ]
 CLAUDE_ALIASES = {"fable": "claude-fable-5-1", "opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5",
                   "haiku": "claude-haiku-5-5"}
+
+DSH_EFFORTS = ["off", "low", "high", "max"]
+DSH_MODELS = [
+    {"id": "deepseek-flash", "name": "DeepSeek Flash", "efforts": DSH_EFFORTS, "default_effort": "high"},
+    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "efforts": DSH_EFFORTS, "default_effort": "high"},
+]
 
 # Codex's list on 2026-10-19, used only when Codex can't be asked.
 CODEX_FALLBACK = [
@@ -122,17 +129,21 @@ def tool_defaults() -> dict:
         codex["effort"] = config.get("model_reasoning_effort")
     except (OSError, tomllib.TOMLDecodeError):
         pass
-    return {"claude": claude, "codex": codex}
+    # dsh's headless profile runs DeepSeek Flash at high effort unless told otherwise.
+    dsh = {"model": "deepseek-flash", "effort": None}
+    return {"claude": claude, "codex": codex, "dsh": dsh}
 
 
 def catalog(refresh: bool = False) -> dict:
-    """Everything the pickers need, for both agents."""
+    """Everything the pickers need, for every tool."""
     codex = codex_models(refresh)
     defaults = tool_defaults()
     return {
         "claude": {"models": CLAUDE_MODELS, "source": "fugue's built-in list of current Claude models",
                    "checked_at": None, "defaults": defaults["claude"]},
         "codex": {**codex, "defaults": defaults["codex"]},
+        "dsh": {"models": DSH_MODELS, "source": "fugue's built-in list of DeepSeek models",
+                "checked_at": None, "defaults": defaults["dsh"]},
     }
 
 
@@ -154,5 +165,5 @@ def check_effort(agent: str, model: str | None, effort: str | None, entry: dict)
     known = find_model(agent, model or entry["defaults"].get("model"), models)
     allowed = known["efforts"] if known else sorted({level for m in models for level in m["efforts"]})
     if effort not in allowed:
-        who = known["name"] if known else ("Claude" if agent == "claude" else "Codex")
+        who = known["name"] if known else TOOL_NAMES.get(agent, agent)
         raise FugueError(f"{who} doesn't take effort {effort!r}; it takes {', '.join(allowed)}.")

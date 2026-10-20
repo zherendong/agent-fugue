@@ -17,6 +17,8 @@
   /* The second member when both use the same tool. */
   --claude-alt: #9a6a00;
   --codex-alt: #0f8577;
+  --dsh: #6b4fd8;
+  --dsh-alt: #b0458f;
   --ok: #2d7d4f;
   --warn: #a8670f;
   --danger: #c0352b;
@@ -42,6 +44,8 @@
     --codex: #7aa8ff;
     --claude-alt: #e0b04c;
     --codex-alt: #4fc4b4;
+    --dsh: #a08cff;
+    --dsh-alt: #e08ac0;
     --ok: #59c287;
     --warn: #e0a84c;
     --danger: #f2756b;
@@ -321,6 +325,8 @@ button.link:hover { color: var(--text); }
 .mdot.codex { background: var(--codex); }
 .mdot.claude.alt { background: var(--claude-alt); }
 .mdot.codex.alt { background: var(--codex-alt); }
+.mdot.dsh { background: var(--dsh); }
+.mdot.dsh.alt { background: var(--dsh-alt); }
 .col-head .who { font-weight: 600; }
 .col-head .model { color: var(--muted); white-space: nowrap; }
 .col-head .letter, .col-head .sub { color: var(--faint); white-space: nowrap; }
@@ -599,6 +605,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .src-m.codex { background: color-mix(in srgb, var(--codex) 10%, transparent); }
 .src-m.claude.alt { background: color-mix(in srgb, var(--claude-alt) 12%, transparent); }
 .src-m.codex.alt { background: color-mix(in srgb, var(--codex-alt) 12%, transparent); }
+.src-m.dsh { background: color-mix(in srgb, var(--dsh) 10%, transparent); }
+.src-m.dsh.alt { background: color-mix(in srgb, var(--dsh-alt) 12%, transparent); }
+.ctx-block.src-m.dsh .ctx-label { color: var(--dsh); }
+.ctx-block.src-m.dsh.alt .ctx-label { color: var(--dsh-alt); }
 .ctx-block.src-m.claude .ctx-label { color: var(--claude); }
 .ctx-block.src-m.codex .ctx-label { color: var(--codex); }
 .ctx-block.src-m.claude.alt .ctx-label { color: var(--claude-alt); }

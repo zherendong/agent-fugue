@@ -24,8 +24,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-TOOLS = ("claude", "codex")
-TOOL_NAMES = {"claude": "Claude", "codex": "Codex"}
+TOOLS = ("claude", "codex", "dsh")
+# The two tools of discussions and config files from before members, and the usual line-up.
+LEGACY_TOOLS = ("claude", "codex")
+TOOL_NAMES = {"claude": "Claude", "codex": "Codex", "dsh": "DeepSeek"}
 LETTERS = "AB"
 
 # How a discussion moves forward on its own. Anyone may change these at any time.
@@ -74,18 +76,18 @@ def upgrade_state(state: dict) -> dict:
     if "labels" in state:
         letters = state["labels"]
     else:
-        letters = dict(zip(TOOLS, assign_letters(len(TOOLS), seed=state["id"])))
+        letters = dict(zip(LEGACY_TOOLS, assign_letters(len(LEGACY_TOOLS), seed=state["id"])))
     settings = state.get("settings", {})
     members = {}
-    for tool in TOOLS:
+    for tool in LEGACY_TOOLS:
         own = settings.get(tool, {})
         members[letters[tool]] = {"tool": tool, "model": own.get("model"), "effort": own.get("effort"),
                                   "args": own.get("args", []), "files": tool}
     new = {key: value for key, value in state.items() if key != "labels"}
     new["version"] = 3
     new["members"] = dict(sorted(members.items()))
-    new["settings"] = {key: value for key, value in settings.items() if key not in TOOLS}
-    new["legacy_names"] = {tool: letters[tool] for tool in TOOLS}
+    new["settings"] = {key: value for key, value in settings.items() if key not in LEGACY_TOOLS}
+    new["legacy_names"] = {tool: letters[tool] for tool in LEGACY_TOOLS}
     new["sessions"] = {letters[tool]: sid for tool, sid in state.get("sessions", {}).items() if tool in letters}
     new["rounds"] = [{**rnd, "entries": {letters.get(name, name): entry for name, entry in rnd["entries"].items()}}
                      for rnd in state.get("rounds", [])]

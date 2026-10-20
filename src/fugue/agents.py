@@ -1,4 +1,4 @@
-"""Starting the Claude Code and Codex command-line tools headless and reading their output live."""
+"""Starting the members' command-line tools (Claude Code, Codex, the DeepSeek Harness) headless and reading their output live."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from functools import cache
 from pathlib import Path
 
 from .store import FugueError
-from .streams import ClaudeStream, CodexStream, Outcome
+from .streams import ClaudeStream, CodexStream, DshStream, Outcome
 
 # Both agents run read-only: they can read files and run commands, but not
 # change files. Two agents editing the same checkout in parallel would trip
@@ -161,6 +161,38 @@ def codex_command(binary: str, *, session_id: str | None, model: str | None, ext
     return cmd + ["-"]  # read the prompt from stdin
 
 
+# The DeepSeek Harness (dsh) runs read-only in its own sandbox (Seatbelt on
+# macOS), and with no one to approve anything: a step that would need approval
+# is refused. Its telemetry (which by default sends session records after a
+# user's feedback) and its extra model call for a session title are off.
+DSH_ENV = {"DSH_PERMISSION_MODE": "read-only", "DSH_TELEMETRY_MODE": "DISABLED"}
+DSH_DEFAULT_MODEL = "deepseek-flash"
+
+
+def dsh_overlay(*, model: str | None, effort: str | None, web: bool = True) -> str:
+    """Settings laid over dsh's headless profile for one run (`dsh --patch`), as YAML."""
+    lines = ["# Written by fugue for one run of the DeepSeek Harness.",
+             "- id: approval", "  config:", "    policy: never",
+             "- id: session-telemetry-otel", "  config:", "    mode: DISABLED",
+             "- id: session-title-llm", "  disabled: true"]
+    if model or effort:
+        lines += ["- id: agent-default-model", "  config:", "    provider: deepseek-official",
+                  f"    model: {json.dumps(model or DSH_DEFAULT_MODEL)}"]
+        if effort:
+            lines.append(f"    reasoningEffort: {json.dumps(effort)}")
+    if not web:
+        for entry in ("web", "tool-web", "web-search-deepseek", "web-fetch-http"):
+            lines += [f"- id: {entry}", "  disabled: true"]
+    return "\n".join(lines) + "\n"
+
+
+def dsh_command(binary: str, *, session_id: str | None, overlay_file: Path, extra_args: list[str]) -> list[str]:
+    cmd = [binary, "--profile", "headless", "--patch", str(overlay_file), *extra_args, "--json"]
+    if session_id:
+        cmd += ["--session-id", session_id]
+    return cmd + ["-"]  # read the prompt from stdin
+
+
 def format_duration(seconds: float) -> str:
     seconds = int(seconds)
     if seconds >= 3600:
@@ -176,9 +208,10 @@ class AgentCall:
     """
 
     def __init__(self, agent: str, cmd: list[str], *, cwd: Path, prompt_file: Path, log_stem: Path,
-                 timeout_s: float, stream: ClaudeStream | CodexStream):
+                 timeout_s: float, stream: ClaudeStream | CodexStream | DshStream, env: dict | None = None):
         self.agent = agent
         self.cmd = cmd
+        self.extra_env = env or {}
         self.cwd = cwd
         self.prompt_file = prompt_file
         self.stdout_path = log_stem.with_suffix(".stdout")
@@ -201,6 +234,7 @@ class AgentCall:
         env.pop("CLAUDECODE", None)
         # The temp folder is the one place Claude's sandbox lets commands write.
         env.setdefault("TMPDIR", user_temp_dir())
+        env.update(self.extra_env)
         stdin = open(self.prompt_file, "rb")
         stdout = open(self.stdout_path, "wb")
         stderr = open(self.stderr_path, "wb")

@@ -4,9 +4,9 @@
 // the right, updated live from the server's event stream.
 
 const TOKEN = document.querySelector('meta[name="fugue-token"]').content;
-const TOOLS = ['claude', 'codex'];
-const NAMES = { claude: 'Claude', codex: 'Codex' };
-const TOOL_LABELS = { claude: 'Claude Code', codex: 'Codex' };
+const TOOLS = ['claude', 'codex', 'dsh'];
+const NAMES = { claude: 'Claude', codex: 'Codex', dsh: 'DeepSeek' };
+const TOOL_LABELS = { claude: 'Claude Code', codex: 'Codex', dsh: 'DeepSeek Harness' };
 
 const S = {
   list: [],
@@ -1455,9 +1455,9 @@ function defaultModelLabel(tool) {
 function defaultEffortLabel(tool, modelId) {
   const entry = S.models && S.models[tool];
   const own = entry && entry.defaults.effort;
-  if (tool === 'codex') {
-    if (own) return `Default: ${own}, from your Codex config`;
-    const model = findModel('codex', modelId || (entry && entry.defaults.model));
+  if (tool === 'codex' || tool === 'dsh') {
+    if (own) return `Default: ${own}, from your ${NAMES[tool]} config`;
+    const model = findModel(tool, modelId || (entry && entry.defaults.model));
     return model && model.default_effort ? `Default: ${model.default_effort}` : 'Default';
   }
   return own ? `Default: ${own}, from your Claude Code settings` : "Default: Claude Code's own";
@@ -1554,10 +1554,10 @@ function membersField(chosen) {
     const codex = S.models.codex;
     const when = codex.checked_at ? ` on ${new Date(codex.checked_at * 1000).toLocaleString()}` : '';
     hint.replaceChildren(
-      'Each member is Claude Code or Codex; both can be the same tool. They know each other only as member A and B, '
-      + 'and the letters are drawn at random when the discussion starts. '
+      'Each member is Claude Code, Codex or the DeepSeek Harness (which uses a DeepSeek API key); members can use the '
+      + 'same tool. They know each other only by letter, drawn at random when the discussion starts. '
       + `Default means fugue passes nothing, so the tool uses its own settings. Codex's models come from ${codex.source}${when}; `
-      + "Claude's list is built into fugue. ",
+      + "Claude's and DeepSeek's lists are built into fugue. ",
       el('button', {
         class: 'link',
         type: 'button',

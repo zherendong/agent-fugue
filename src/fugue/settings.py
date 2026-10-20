@@ -16,7 +16,7 @@ from pathlib import Path
 from . import __version__
 from .agents import codex_switched_on, find_binary, user_temp_dir
 from .config import DEFAULT_TIMEOUT_MINUTES, config_path, default_members, load_config, normalize_member
-from .store import DEFAULT_CONTROL, TOOLS, FugueError, discussions_dir
+from .store import DEFAULT_CONTROL, LEGACY_TOOLS, TOOLS, FugueError, discussions_dir
 
 
 def read_defaults() -> dict:
@@ -56,7 +56,7 @@ def save_defaults(new: dict) -> dict:
     config.update(max_rounds=rounds, pause_after_each_round=new["pause_after_each_round"], web=new["web"],
                   timeout_minutes=timeout)
     # The line-up replaces the [claude] and [codex] tables of config files from before members.
-    for tool in TOOLS:
+    for tool in LEGACY_TOOLS:
         config.pop(tool, None)
     config["members"] = [{key: value for key, value in member.items() if value} for member in members]
     path = config_path()
@@ -110,6 +110,22 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess | None:
         return None
 
 
+def dsh_key_source() -> str | None:
+    """Where dsh would find a DeepSeek API key, without reading the key: the environment, its credentials file,
+    or its home .env."""
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return "from the environment"
+    home = Path(os.environ.get("DSH_HOME") or "~/.dsh").expanduser()
+    for path, label in ((home / ".credentials.yaml", "saved in dsh"), (home / ".env", "in dsh's .env")):
+        try:
+            if any(line.split(":")[0].split("=")[0].strip() == "DEEPSEEK_API_KEY"
+                   for line in path.read_text(encoding="utf-8").splitlines()):
+                return label
+        except OSError:
+            continue
+    return None
+
+
 def agent_status(agent: str) -> dict:
     """Is the agent's command found, which version, and is it logged in. Doesn't call any model."""
     try:
@@ -127,6 +143,11 @@ def agent_status(agent: str) -> dict:
             info = {}
         found["logged_in"] = bool(info.get("loggedIn"))
         found["login"] = f"logged in ({info.get('authMethod')})" if info.get("loggedIn") else "not logged in: run `claude` and /login"
+    elif agent == "dsh":
+        where = dsh_key_source()
+        found["logged_in"] = where is not None
+        found["login"] = (f"DeepSeek API key {where}" if where
+                          else "no DeepSeek API key: set DEEPSEEK_API_KEY, or save one in dsh's settings")
     else:
         login = _run([path, "login", "status"])
         text = ((login.stdout or login.stderr).strip() if login else "") or "unknown"

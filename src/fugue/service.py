@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 from .agents import find_binary
-from .store import TOOLS, FugueError, fugue_home
+from .store import FugueError, fugue_home
 
 LABEL = "ai.fugue.web"
 PROTECTED_FOLDERS = ("Desktop", "Documents", "Downloads")
@@ -175,7 +175,9 @@ def install(port: int) -> int:
     if port_in_use(port):
         raise FugueError(f"Something is already using port {port}, probably `fugue web` running in a terminal. "
                         "Stop it (Ctrl-C) and run this again, or choose another port with --port.")
-    for tool in TOOLS:
+    from .config import default_members
+
+    for tool in {member["tool"] for member in default_members()}:
         try:
             find_binary(tool)
         except FugueError as exc:

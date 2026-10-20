@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Stands in for `dsh --profile headless --json` (the DeepSeek Harness) in tests.
+
+Logs each call (arguments, prompt, folder, the permission and telemetry
+settings it was started with) to $FAKE_LOG_DIR/calls.jsonl and prints events
+like the real tool: session, a step with thinking and a tool call, the
+answer, then final. FAKE_DSH_FAIL=1 makes it fail; FAKE_OBJECTIONS sets the
+objection count it reports; FAKE_SLEEP pauses mid-work.
+"""
+import json, os, sys, time, uuid
+
+def out(obj):
+    print(json.dumps(obj), flush=True)
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("0.2.0-rc.2")
+    sys.exit(0)
+prompt = sys.stdin.read() if args[-1] == "-" else args[-1]
+session = args[args.index("--session-id") + 1] if "--session-id" in args else f"session-{uuid.uuid4()}"
+log = os.path.join(os.environ["FAKE_LOG_DIR"], "calls.jsonl")
+with open(log, "a") as f:
+    f.write(json.dumps({"agent": "dsh", "args": args, "prompt": prompt, "cwd": os.getcwd(), "session": session,
+                        "permission": os.environ.get("DSH_PERMISSION_MODE"),
+                        "telemetry": os.environ.get("DSH_TELEMETRY_MODE")}) + "\n")
+calls = sum(1 for line in open(log) if json.loads(line)["agent"] == "dsh")
+
+out({"type": "session", "sessionId": session, "cwd": os.getcwd()})
+out({"type": "status", "phase": "turn_start", "turn": 1})
+out({"type": "status", "phase": "step_start", "turn": 1, "step": 1})
+out({"type": "thinking", "text": "Looking for the cache code first."})
+out({"type": "tool_call", "callId": "c1", "tool": "grep", "input": {"pattern": "cache", "path": os.path.join(os.getcwd(), "src")}})
+out({"type": "tool_result", "callId": "c1", "status": "error", "result": "no matches"})
+out({"type": "status", "phase": "step_end", "turn": 1, "step": 1, "usage": {"inputTokens": 200, "outputTokens": 20}})
+time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
+if os.environ.get("FAKE_DSH_FAIL") == "1":
+    out({"type": "status", "phase": "turn_end", "turn": 1, "reason": "error"})
+    out({"type": "final", "text": ""})
+    print("dsh: provider_error: simulated DeepSeek failure", file=sys.stderr)
+    sys.exit(1)
+
+remaining = os.environ.get("FAKE_OBJECTIONS", "1")
+reply = f"DeepSeek reply number {calls}. Session {session[8:16]}.\n\nSome analysis.\n\nObjections: {remaining}"
+out({"type": "status", "phase": "step_start", "turn": 1, "step": 2})
+out({"type": "text", "text": reply})
+out({"type": "status", "phase": "step_end", "turn": 1, "step": 2, "usage": {"inputTokens": 300, "outputTokens": 40}})
+out({"type": "status", "phase": "turn_end", "turn": 1, "reason": "completed"})
+out({"type": "final", "text": reply})
