@@ -105,6 +105,21 @@ def test_it_pauses_after_every_round_by_default(env):
     assert list(env["work"].iterdir()) == []
 
 
+def test_a_round_that_cannot_start_pauses_and_says_why(env):
+    folder = env["work"] / "moved"
+    folder.mkdir()
+    assert fugue("start", "Q?", "--cwd", str(folder), "-q") == 0
+    folder.rmdir()
+    fugue("continue", "-q")
+    status = engine.describe(latest())
+    assert status["phase"] in ("paused", "stopped") and "no longer exists" in status["detail"]
+    # The reason stays until a round starts again.
+    folder.mkdir()
+    assert fugue("continue", "-q") == 0
+    assert kinds(latest()) == ["answer", "comment"]
+    assert not engine.describe(latest()).get("detail")
+
+
 def test_without_pausing_it_runs_to_the_round_limit(env):
     assert fugue("start", "Q?", "--no-pause", "-q") == 0
     discussion = latest()

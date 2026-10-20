@@ -21,7 +21,7 @@ const S = {
   frame: 0,
   refreshTimer: 0,
   follow: false,        // keep the view scrolled to the bottom while it runs
-  activityOpen: new Set(), // "round:letter" of replies whose steps are shown
+  activityOpen: new Set(), // "discussion:round:letter" of replies whose steps are shown
   historyOpen: new Set(),  // discussions whose earlier rounds are unfolded
   roundOpen: new Set(),    // "discussion:round" of earlier rounds that are unfolded
   questionOpen: new Set(), // discussions whose long question is shown in full
@@ -33,7 +33,7 @@ const S = {
   phases: new Map(),
   drafts: new Map(),       // discussion id -> files and where the box was sending, while you are elsewhere
   info: null,
-  loadedAt: Date.now() / 1000,
+  noticesSince: Date.now() / 1000,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -59,6 +59,8 @@ function el(tag, props, ...children) {
 }
 
 async function api(method, path, body) {
+  // After a restart only reloading helps, so the page stops asking.
+  if ($('#banner').dataset.problem === 'restarted') throw new Error('fugue was restarted. Reload the page.');
   let response;
   try {
     response = await fetch(path, {
@@ -84,6 +86,7 @@ function connection(problem) {
   banner.dataset.problem = problem || '';
   banner.hidden = !problem;
   if (problem === 'restarted') {
+    if (S.source) S.source.close();
     banner.replaceChildren(el('span', {}, 'fugue was restarted, so this page lost touch with it.'),
       el('button', { class: 'btn small primary', type: 'button', onclick: () => location.reload() }, 'Reload'));
   } else if (problem === 'down') {
@@ -516,6 +519,7 @@ async function openDiscussion(id) {
 // ---------------------------------------------------------------- live events
 
 function connect(id) {
+  S.noticesSince = Date.now() / 1000;
   const source = new EventSource(`/api/discussions/${encodeURIComponent(id)}/events?after=0&token=${encodeURIComponent(TOKEN)}`);
   source.onmessage = (message) => {
     if (S.source !== source) return;
@@ -567,7 +571,7 @@ function onEvent(ev) {
       markDirty(key);
       break;
     case 'notice':
-      if (ev.t > S.loadedAt) toast(ev.text, ev.level === 'error' ? 'error' : 'info');
+      if (ev.t > S.noticesSince) toast(ev.text, ev.level === 'error' ? 'error' : 'info');
       break;
     default: // round_started, round_finished, agent_finished, runner
       refreshSoon();
@@ -599,14 +603,15 @@ function refreshSoon() {
 async function refreshDetail() {
   const id = S.id;
   if (!id) return;
+  const asked = (S.detailAsked = (S.detailAsked || 0) + 1);
   let data;
   try {
     data = await api('GET', `/api/discussions/${encodeURIComponent(id)}`);
   } catch (error) {
-    if (!S.detail) $('#content').replaceChildren(el('p', { class: 'muted' }, error.message));
+    if (!S.detail && S.id === id) $('#content').replaceChildren(el('p', { class: 'muted' }, error.message));
     return;
   }
-  if (S.id !== id) return;
+  if (S.id !== id || asked !== S.detailAsked) return;
   const json = JSON.stringify(data);
   if (json === S.detailJson) return;
   const before = S.detail && S.detail.status.phase;
@@ -791,7 +796,7 @@ function drawDiscussion() {
   $('#content').replaceChildren(el('div', { class: 'discussion' },
     discussionHead(d),
     questionBlock(d),
-    d.status.phase === 'stopped' && d.status.detail ? el('div', { class: 'problem' }, d.status.detail) : null,
+    ['stopped', 'paused'].includes(d.status.phase) && d.status.detail ? el('div', { class: 'problem' }, d.status.detail) : null,
     view ? view.node : el('p', { class: 'muted starting' }, 'Starting…'),
     pendingSection(d),
     historySection(d, view ? view.round : null)));
@@ -1305,7 +1310,7 @@ function historyRound(d, r) {
     tally(r),
     sentNotes(d, r).length ? el('span', { class: 'you-mark' }, 'with your note') : null,
     el('span', { class: 'spacer' }),
-    el('span', { class: 'brief' }, shown.map((letter) => `${shortWho(d, letter)} ${stateText(r.entries[letter])}`).join(' · '))),
+    el('span', { class: 'brief' }, shown.map((letter) => `${shortWho(d, letter)} ${stateText(shownEntry(d, r.entries[letter]))}`).join(' · '))),
     open ? el('div', { class: 'hround-body' },
       r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r) : null,
       sentNotes(d, r),
@@ -1349,10 +1354,15 @@ function columnHead(d, letter, sub, state) {
     el('span', { class: 'state' }, state));
 }
 
+// A reply marked as running whose run has ended (its process was killed) shows as stopped.
+function shownEntry(d, e) {
+  return e.status === 'running' && d.status.phase !== 'running' ? { ...e, status: 'failed', error: 'interrupted' } : e;
+}
+
 function card(r, letter) {
   const d = S.detail;
-  const e = r.entries[letter];
-  const key = `${r.index}:${letter}`;
+  const e = shownEntry(d, r.entries[letter]);
+  const key = stepsKey(r.index, letter);
   let body;
   if (e.status === 'running') body = el('div', { class: 'live md' });
   else if (e.status === 'done') body = el('div', { class: 'reply md', html: md(e.reply) });
@@ -1368,17 +1378,21 @@ function card(r, letter) {
   columnHead(d, letter, null, stateText(e)),
   body,
   el('footer', {},
-    el('button', { class: 'link steps-toggle', type: 'button', hidden: true, onclick: () => toggleSteps(key) }),
+    el('button', { class: 'link steps-toggle', type: 'button', hidden: true, onclick: () => toggleSteps(r.index, letter) }),
     el('button', { class: 'link', type: 'button', onclick: () => showContext(r.index, letter) }, 'Inspect context'),
     e.status === 'done' ? el('button', { class: 'link', type: 'button', onclick: () => copy(e.reply) }, 'Copy') : null),
   el('ol', { class: 'steps', hidden: !S.activityOpen.has(key) }));
 }
 
 // A reply's steps (files read, commands run) are hidden until asked for.
-function toggleSteps(key) {
+function stepsKey(round, letter) {
+  return `${S.id}:${round}:${letter}`;
+}
+
+function toggleSteps(round, letter) {
+  const key = stepsKey(round, letter);
   if (S.activityOpen.has(key)) S.activityOpen.delete(key);
   else S.activityOpen.add(key);
-  const [round, letter] = key.split(':');
   const node = document.getElementById(`card-${round}-${letter}`);
   if (node) node.querySelector('.steps').hidden = !S.activityOpen.has(key);
   patchCard(round, letter);
@@ -1564,7 +1578,7 @@ function modes(d) {
 function drawModes(d) {
   const all = modes(d);
   const select = $('#composer-mode');
-  const wanted = JSON.stringify(Object.entries(all).map(([mode, m]) => [mode, m.label]));
+  const wanted = JSON.stringify(Object.entries(all).map(([mode, m]) => [mode, m.label, m.name]));
   if (select.dataset.modes !== wanted) {
     select.dataset.modes = wanted;
     select.replaceChildren(...Object.entries(all).map(([mode, m]) => el('option', { value: mode, title: m.name }, m.label)));
@@ -1616,6 +1630,7 @@ async function submitText() {
   if (!ok) return false;
   $('#composer-text').value = '';
   storeDraftText();
+  S.modeChosen = false;
   if (S.mode === 'ask') S.picker.clear();
   sizeComposer();
   return true;
@@ -1976,7 +1991,7 @@ function membersField(chosen, onchange = null) {
           await loadModels(true);
           const fresh = membersField(current, onchange);
           box.replaceWith(fresh);
-          box.read = fresh.read;
+          box.read = () => fresh.read();
         },
       }, 'Ask Codex again'));
   } else {
@@ -1993,10 +2008,12 @@ async function showNewQuestion() {
   leaveDiscussion();
   $('#composer').hidden = true;
   drawList();
+  const here = location.hash;
   const [folders, settings] = await Promise.all([
     api('GET', '/api/folders').catch(() => ({ default: '', recent: [] })),
     api('GET', '/api/settings').catch(() => null),
   ]);
+  if (location.hash !== here) return;
   const defaults = settings ? settings.defaults : null;
   const saved = prefs();
   const cwdDefault = saved.cwd || folders.recent[0] || folders.default;
@@ -2143,7 +2160,9 @@ async function showSettings() {
   $('#composer').hidden = true;
   drawList();
   $('#content').replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
+  const here = location.hash;
   const [settings] = await Promise.all([api('GET', '/api/settings').catch((error) => ({ error: error.message })), loadModels()]);
+  if (location.hash !== here) return;
   if (settings.error) {
     $('#content').replaceChildren(el('p', { class: 'muted' }, settings.error));
     return;
@@ -2257,7 +2276,12 @@ function init() {
       if (S.primary) S.primary.click();
     }
   });
-  text.addEventListener('input', () => { sizeComposer(); storeDraftText(); });
+  text.addEventListener('input', () => {
+    // Once you write, the box keeps sending where it did: a round finishing mustn't turn a note into a question.
+    if (text.value.trim()) S.modeChosen = true;
+    sizeComposer();
+    storeDraftText();
+  });
   // Wait for focus to settle, so moving between the box's own controls keeps it open.
   $('.composer-box').addEventListener('focusin', () => setTimeout(sizeComposer));
   $('.composer-box').addEventListener('focusout', () => setTimeout(sizeComposer));

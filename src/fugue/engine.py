@@ -365,13 +365,14 @@ def describe(discussion: Discussion) -> dict:
         label = f"Stopped in round {last['index']}"
         if failed:
             label += f": {join_letters([short_name(discussion, a) for a in failed])} failed"
-        detail = "; ".join(f"{discussion.name(a)}: {error}" for a, error in failed.items())
+        detail = state.get("problem") or "; ".join(f"{discussion.name(a)}: {error}" for a, error in failed.items())
         return {"phase": "stopped", "label": label, "detail": detail, "needs_you": True, "next": next_step}
     if plan(state, control, requests) is not None:
         return {"phase": "ready", "label": f"Ready: next, {next_step}", "needs_you": True, "next": next_step}
     if control["paused"] and next_step:
         label = f"Paused after round {last['index']}" if last else "Paused"
-        return {"phase": "paused", "label": label, "needs_you": True, "next": next_step}
+        return {"phase": "paused", "label": label, "detail": state.get("problem", ""), "needs_you": True,
+                "next": next_step}
     if last and agreed(last):
         return {"phase": "finished", "label": f"Agreed in round {last['index']}", "needs_you": False, "next": None}
     comments = [rnd for rnd in current_question(rounds)
@@ -451,10 +452,15 @@ class Runner:
                     break
                 if "request" in step:
                     discussion.pop_request(step["request"]["id"])
+                if discussion.state.pop("problem", None) is not None:
+                    discussion.save()
                 try:
                     rnd = self._execute(discussion, step)
                 except FugueError as exc:
-                    # Pause, so the runner doesn't try the same step again and again.
+                    # Pause, so the runner doesn't try the same step again and again, and
+                    # keep the reason where the page and `fugue status` show it.
+                    discussion.state["problem"] = str(exc)
+                    discussion.save()
                     discussion.update_control(paused=True)
                     discussion.emit({"type": "notice", "level": "error", "text": str(exc)})
                     break
