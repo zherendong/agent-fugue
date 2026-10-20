@@ -385,7 +385,7 @@ def step_label(rounds: list[dict], step: dict | None, in_council: bool = False) 
 
 
 def short_name(discussion: Discussion, letter: str) -> str:
-    """A member's name in a one-line status: its tool, or its letter when both members use the same tool."""
+    """A member's name in a one-line status: its tool, or its letter when another member uses the same tool."""
     tool = discussion.members[letter]["tool"]
     if sum(1 for member in discussion.members.values() if member["tool"] == tool) > 1:
         return f"member {letter}"

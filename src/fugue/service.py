@@ -2,7 +2,7 @@
 
 The agent starts when the user logs in and is started again if it stops, so the
 page answers without a terminal window left open. It gets the PATH of the shell
-that installed it, so it finds `claude`, `codex` and the tools they run.
+that installed it, so it finds `claude`, `codex`, `dsh` and the tools they run.
 
 macOS guards some folders in the home folder (Desktop, Documents, Downloads)
 with its privacy protection. A program started by launchd needs the user's

@@ -1,78 +1,25 @@
 # fugue
 
-Ask two to four coding agents the same question, as a small council: Claude Code, Codex and the DeepSeek Harness, in any mix, with the models and effort levels you choose. Each answers on its own. Two members then comment on each other's answer and update their own, round by round; three or four vote for the best answer to start from, its author merges in the others' best points, and the others review it until no one objects. Either way it runs until there are no objections left or a round limit is reached. You watch it live in a local web page (or the terminal), move it on yourself after every round, and add your own view whenever you want, without copying replies between two windows. Like the voices of a fugue, each member first states its own answer, then they answer each other until the lines fit together.
+fugue asks two to four coding agents the same question and has them check each other's answers, step by step, until no one objects or a round limit is reached. The members can be Claude Code, Codex and the DeepSeek Harness, in any mix, each with the model and effort level you choose. You watch the discussion live on a local web page (or in the terminal), add your own view whenever you want, and move it on when you're ready. Like the voices of a fugue, each member first states its own answer, then they answer each other until the lines fit together.
 
-```bash
-fugue web                                  # open the page; start questions from there
-fugue start "Why does the embedding cache miss on cold start? Propose a fix."   # or run one in the terminal
-```
+![The fugue page with a finished two-member discussion: the list of discussions on the left, Claude's and Codex's latest answers side by side, and the bar for a follow-up question at the bottom](docs/images/discussion.png)
 
-## Why
+*The screenshots in this README show invented example discussions.*
 
-Sending one question to two agents covers more edge cases than either one alone. The hard part is the shuttling afterwards: copying each reply into the other agent, in the right order, with the right framing ("here is another agent's analysis of the same question" in the first round, "here is its review of your proposal" in the second), and keeping track of who has seen what. After a round or two that gets hard to manage. fugue does the shuttling, shows you what each agent is doing while it works, and keeps the record.
+## Why use it
 
-## How it works
+Several agents asked the same question cover more edge cases than any one of them alone. Doing that by hand means copying each reply into the other agents' sessions, in the right order and with the right framing, and keeping track of who has seen what; after a round or two it gets hard to manage. fugue does the shuttling, shows you what each member is doing while it works, and keeps the record.
 
-**How fugue talks to the agents.** It runs their own command-line tools headless (`claude -p`, `codex exec` and `dsh --profile headless`), so each agent keeps its normal tools, project instructions (`CLAUDE.md`, `AGENTS.md`) and its ability to read the code. Each agent has one session for the whole discussion, and fugue resumes it at every step (`claude --resume`, `codex exec resume`, `dsh … --session-id`). So each agent remembers its own earlier reasoning, and fugue only sends what is new. While an agent works, fugue reads its live output (`--output-format stream-json` and `--json`) and turns it into actions you can watch: "Read src/cache.py", "$ rg -n cache src", how far Claude has got while it thinks ("Thinking: about 12k tokens so far"; at high effort it can think for minutes before writing), and the reply as it is written.
+Each member runs in its own command-line tool, so it keeps its normal tools, project instructions (`CLAUDE.md`, `AGENTS.md`) and its ability to read the code. Members can read files and run commands but can't change anything, so fugue suits analysis: questions about a codebase, design reviews, or checking a document or a resume.
 
-**Two members.** The members are equal; there are no roles. Each member is a tool (Claude Code, Codex or the DeepSeek Harness) with a model, an effort level and any extra arguments, and members can use the same tool, for example two Codex members with different models. With two members, both take part in every step, in parallel, and both do the same job:
+## Quick start
 
-- *Step 1, independent answers.* Both get your question unchanged, in separate sessions. Neither sees the other's answer.
-- *Comment steps.* Each reads the other's current answer and comments on it: what it got right that it had missed, what is wrong or unsupported (checking the other's claims with its tools rather than trusting them, and citing what it checked), and what is missing for what you asked. Each comment ends with `Objections: N`, the problems in that answer that would change its conclusions or recommendations, and `Suggestions: N`. Smaller points, and anything beyond your question, are suggestions, so both members count objections the same way. When an answer rewrites, summarizes or quotes something you gave (an attached file, text in the question, a file in the folder), the other member goes through it line by line against the source: a claim stronger than the source, or a fact it doesn't contain, is an objection, quoted next to the source's own wording. Members check their own rewrites the same way before they hand them in.
-- *Update steps.* Each reads the comments on its own answer and writes its full updated answer, keeping its layout so the changes are easy to see. The answer stands on its own; after it, under a `## Responses` heading, the member says for each objection whether it accepts it, accepts part of it, or turns it down and why. What is still disputed goes there, not into the answer.
+You need [uv](https://docs.astral.sh/uv/), and on your PATH the tools your members will use, each signed in the way you normally use it:
 
-Comments and updates alternate. Each step only uses what the step before it produced, so no message has to keep track of replies still being written: comments are always about the other's answer as it stands now, which was written after reading every earlier comment.
+- Claude Code (`claude`) and Codex (`codex`), with their own logins;
+- for DeepSeek members, the DeepSeek Harness (`dsh`, installed with `npm install -g @deepseek-ai/dsh`), with a DeepSeek API key saved on dsh's Models page.
 
-It stops when a comment step has no objections on either side (they agree), or after the round limit (2 rounds of comments and updates by default; a round is a comment step and the update step after it). When they agree but a comment still has suggestions, the member whose answer got them writes one closing version that takes in the ones it accepts, and the discussion ends there. The result is the members' latest answers; if the round limit ended it after comments with objections, the page shows those objections under the answers, each with its author's response from the last update.
-
-**Three or four members.** Everyone reading and rewriting everyone's answer at every step would cost too much, so a council of three or four works from one shared answer:
-
-- *Independent answers*, as above.
-- *Vote.* Each member ranks the other members' answers (never its own), each seeing them in its own random order, and says what each gets right and the problems that would change its conclusions. Every ballot gives an answer one point for every answer it ranks below it; the answer with the most points is the starting point (a tie is drawn at random). A ballot without a readable ranking isn't counted, and the page says why.
-- *Merge.* The author of the starting point merges the other members' best points into it (it read their answers when it voted), fixes the problems the ballots found, and lists the points it didn't take, with reasons.
-- *Review.* The other members review the result: objections (including their own points left out or misrepresented), suggestions, and whether another starting point would clearly have been better.
-- *Revise.* The author revises: the full answer first, then a response to each objection and the points it still hasn't taken.
-
-Reviews and revisions alternate until no reviewer objects, or until the round limit (rounds of a review and a revision) is reached; the last revision is reviewed too, so you see what is still open. When no reviewer objects but some made suggestions, the author writes one closing version that takes in the ones it accepts. When most reviewers say the starting point was wrong, or the objections haven't gone down over the last two reviews, everyone answers again and the council votes again, once per question on its own; "Vote again" (or `fugue revote`) asks for it any time. Votes and reviews stay symmetric: every member ranks, and every member but the author reviews, so no answer wins by who wrote it. The result is the council's one answer, with the points it didn't take and any objections still open.
-
-**Hidden names, fixed letters.** The members are never told which agent or model the other is. Each gets a letter for the whole discussion, member A or member B, drawn at random when the discussion starts, so the first member you choose isn't always "A". Every message from step 2 on says "You are member A; the other member is member B", forwarded replies are marked `from="member B"`, and the members are asked to write about themselves as "I" and refer to each other only by letter. A letter means the same member to whoever reads it, whereas "the other member" would point to someone else once a reply is passed on. The page, the transcript and `fugue status` show you who is who, for example "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)" when both members use the same tool. The exact wording sent to the members is in [src/fugue/prompts.py](src/fugue/prompts.py); edit it there to change how they talk to each other.
-
-**Attached files.** A question (or a follow-up) can come with files: PDFs, Word files, images, text. They are kept in the discussion's own `attachments/` folder, and each member's first message for that question lists them after the question with their kind, size and path. The members run read-only, so they can't install a PDF reader for themselves; fugue does the converting when a file arrives. PDF and Word files get a text version (pypdf for PDFs, reading each page by where its letters sit, so words drawn a few letters at a time stay whole), and a PDF's first 10 pages are also rendered as images (pypdfium2). Each member is told what suits its tool: Claude Code opens the PDF itself, Codex is handed the page images and attached images with its message (`--image`), and the DeepSeek Harness is given the page images' paths to open on image-capable models such as DeepSeek Flash. Every member is told that the original is what counts and that a text version can get spacing or order wrong, so layout and formatting are judged from the original or its pages. A question takes up to 50 MB of files. A question doesn't need a project folder: without one, the members work in the attachments folder, which suits reviewing a resume or a design document.
-
-**Steps and rounds.** The page, the transcript and `fugue status` number each step from 1: step 1 is the independent answers, and every comment, update, vote, merge, review or revision after it is the next step. A round, as in the round limit, is a pair of steps after the answers: a comment step and an update step, or a review and a revision. Forwarded replies carry their step number (`step="2"`), so a member that cites a step means the same one you see.
-
-**Where you come in.** fugue pauses and names the next step, for example "Next: each comments on the other's answer"; you move it on when you're ready. Two members pause after every step; a council pauses after its vote (to see the points, and start from another answer if you like) and after each revision. At any time you can:
-
-- add a note to every member or just one; it goes into the next message fugue sends that member;
-- stop the agents mid-step;
-- ask for one more round, also after they agreed or reached the limit;
-- ask a follow-up question, which starts again with independent answers;
-- change the round limit, or switch off "pause after each step" to let it run to the end by itself. Changing these never starts the members on its own; Continue does.
-
-If an agent fails or is stopped, the discussion waits; continuing retries just that agent with the same message.
-
-**Who has seen what.** fugue records which of the other agent's replies each agent has already received, so nothing is forwarded twice or skipped and the order is always right. "Inspect context" on each reply shows the exact message the member got that round, and everything fugue had sent it up to then, with each part marked by where it came from.
-
-**Same tool, same blind spots.** Members running the same model tend to make the same mistakes and agree on them, so the council catches less. Different tools or models work best; the page warns when two members run the same model.
-
-**What the agents may do.** Read files and run commands, but not change anything: two agents editing the same checkout at the same time would trip over each other, and fugue is meant for analysis. Both run in their tool's own sandbox, where macOS itself refuses writes:
-
-- *Codex* runs in its `read-only` sandbox, which also refuses its own file editor (`apply_patch`). What in your Codex setup acts outside that sandbox is switched off for fugue's runs: the apps connector (`--disable apps`), and every plugin and MCP server that is on in `~/.codex/config.toml` (computer use, Chrome, `node_repl` and so on), each with a `-c ….enabled=false` override. Your Codex config file is not changed, and your model and effort settings still apply.
-- *DeepSeek* (the DeepSeek Harness) runs with its `read-only` permission preset, in its own sandbox (Seatbelt on macOS), with approvals refused since nobody can answer them. Its telemetry, which by default sends session records after a user's feedback, and its extra model call for a session title are off for fugue's runs, set in a settings overlay written for each run (`--patch`); your dsh profile is not changed. The overlay also turns on dsh's store of saved keys, which its headless mode leaves off, so runs use the API key you saved in dsh.
-- *Claude* runs in Claude Code's sandbox, set for fugue's runs only (passed with `--settings`; your own Claude settings are not changed). Nobody can answer permission prompts in a headless run, so Claude runs in "don't ask" mode, where anything that would ask is refused; Bash is allowed outright because every command runs inside the sandbox. The sandbox refuses writes to the project and your home folder (the temp folder stays writable, as some tools need it), refuses network access, refuses to start a command outside itself, and the run fails rather than going ahead if the sandbox can't start. Claude's own file tools can't write (`Edit`, `Write` and `NotebookEdit` are turned off), and its Read tool may read any file except in `~/.ssh` and `~/.aws`. If your Claude settings list `sandbox.excludedCommands`, those commands would run outside the sandbox, so fugue then stops allowing Bash outright and Claude only gets the commands the sandbox approves by itself.
-
-**The web, for both or neither.** "Members may use the web" (on by default; `--no-web` on the command line, `web = false` in the config file) applies to both members:
-
-- *On:* Codex keeps its web search, which runs on OpenAI's servers. Claude may use WebSearch and WebFetch. Claude's page fetches come from your Mac, so fetches from `localhost` and `127.0.0.1` are refused; other addresses only your Mac can reach (other local servers, your network) are not blocked.
-- *Off:* Claude's WebSearch and WebFetch are switched off, Codex runs with `web_search="disabled"`, and DeepSeek's web tools are switched off in its overlay.
-
-With the web on, a page an agent reads could contain instructions aimed at it, for example to send the contents of a file it read somewhere. That holds for both agents; switch the web off for sensitive projects.
-
-The exact flags are in `claude_read_only_args`, `codex_isolation_args` and `dsh_overlay` in [src/fugue/agents.py](src/fugue/agents.py).
-
-## Install
-
-You need [uv](https://docs.astral.sh/uv/), and on your PATH the tools your members use: `claude` and `codex`, each logged in as you normally use them (fugue uses those logins), and for DeepSeek members `dsh` (`npm install -g @deepseek-ai/dsh`) with a DeepSeek API key saved on dsh's Models page, or in `~/.dsh/.env` as `DEEPSEEK_API_KEY=…` (`DEEPSEEK_API_KEY` in your shell also works when fugue is started from that shell; the background service doesn't get it). Settings' status check shows what it finds.
+fugue uses each tool's own sign-in and keeps no API keys of its own. Install it:
 
 ```bash
 git clone https://github.com/zherendong/agent-fugue.git
@@ -82,79 +29,182 @@ uv tool install --python 3.11 --editable .
 
 `--editable` means changes to the source (for example to the prompts or the page) take effect without reinstalling. Remove it with `uv tool uninstall agent-fugue`.
 
-## The web page
+Start the page:
+
+```bash
+fugue web
+```
+
+It opens <http://127.0.0.1:8765/>. Click **New question**, write your question, set **Folder** to the project the members should work in (or click **No folder**), and click **Ask**. Unless you change it, a discussion has one Claude Code member and one Codex member, runs up to two rounds, and pauses after every step for you to continue. **Settings** (bottom left) shows whether fugue found each tool and its sign-in.
+
+The same from the terminal:
+
+```bash
+cd ~/code/my-repo
+fugue start "Why does the embedding cache miss on cold start? Propose a fix."
+fugue continue    # run the next step; repeat until the discussion finishes
+```
+
+`fugue start` runs the first step and stops at the first pause; `fugue status` says where a discussion stands and what comes next. Discussions started in a terminal show up on the page live too.
+
+## How a discussion works
+
+### Steps and rounds
+
+A discussion moves in steps, numbered from 1 on the page, in the transcript and in `fugue status`. Step 1 is the independent answers: every member gets your question unchanged, in its own session, and answers without seeing the others. What follows depends on how many members there are. A *round*, as in the round limit, is a pair of steps after the answers: a comment step and an update step with two members, or a review and a revision with three or four. The default round limit is 2.
+
+### Two members: comment and update
+
+- **Comment steps.** Each member reads the other's current answer and comments on it: what it got right that the commenter missed, what is wrong or unsupported (checking the claims with its tools rather than trusting them, and citing what it checked), and what is missing for what you asked. Each comment ends with `Objections: N`, the problems that would change the answer's conclusions or recommendations, and `Suggestions: N`, everything smaller, including anything beyond your question.
+- **Update steps.** Each member reads the comments on its own answer and writes its full updated answer, keeping its layout so the changes are easy to see. The answer stands on its own; after it, under a `## Responses` heading, the member says for each objection whether it accepts it, accepts part of it, or turns it down, and why. What is still disputed goes there, not into the answer.
+
+Comments and updates alternate, so a comment is always about the other's answer as it stands now.
+
+```mermaid
+flowchart TD
+    Q([Your question]) --> A[Step 1: each member answers on its own]
+    A --> C[Each comments on the other's answer]
+    C -->|objections| U[Each updates its own answer]
+    U -->|rounds left| C
+    U -->|round limit| E([Their latest answers])
+    C -->|agreed, with suggestions| F[Closing versions take in the suggestions]
+    C -->|agreed, no suggestions| E
+    F --> E
+```
+
+### Three or four members: vote, merge, review, revise
+
+Everyone reading and rewriting everyone's answer at every step would cost too much, so a council of three or four works from one shared answer:
+
+- **Vote.** Each member ranks the other members' answers (never its own), each seeing them in its own random order, and says what each gets right and which problems would change its conclusions. Every ballot gives an answer one point for each answer ranked below it; the answer with the most points is the starting point. Between answers with equal points, the one ranked first more often wins, and a tie that remains is drawn at random. A ballot without a readable ranking isn't counted, and the page says why.
+- **Merge.** The author of the starting point merges the other members' best points into it (it read their answers when it voted), fixes the problems the ballots found, and lists the points it didn't take, with reasons, under `## Points not taken`.
+- **Review.** The other members review the result: objections (including their own points left out or misrepresented), suggestions, and whether another starting point would clearly have been better.
+- **Revise.** The author writes the full revised answer, then, under `## Responses`, a response to each objection and the points it still hasn't taken.
+
+Reviews and revisions alternate, and the last revision is reviewed too, so you see what is still open. When most reviewers say another starting point would have been better, or the objections haven't gone down over the last two reviews, every member answers again and the council votes again; this happens on its own once per question, and **Vote again** on the page (or `fugue revote`) asks for it whenever you like after a vote. Every member votes and every member but the author reviews, so no answer wins by who wrote it.
+
+```mermaid
+flowchart TD
+    Q([Your question]) --> A[Step 1: each member answers on its own]
+    A --> V[Each votes for the best answer to start from]
+    V --> M[Its author merges in the others' best points]
+    M --> R[The others review the shared answer]
+    R -->|objections, rounds left| Rv[The author revises]
+    Rv --> R
+    R -->|wrong start, or stalled| A2[Everyone answers again]
+    A2 --> V
+    R -->|agreed, with suggestions| F[A closing version takes in the suggestions]
+    R -->|agreed, no suggestions| E([The council's answer])
+    R -->|round limit| E
+    F --> E
+```
+
+After the vote, the page shows each answer's points and which one the council starts from; until the merge begins, "Start from this one" picks another:
+
+![A council of three paused after its vote: a board with each answer's points, the chosen starting point and "Start from this one" links, the three ballots below it, a note from you waiting to go out, and the button for the next step](docs/images/vote.png)
+
+### How it ends
+
+A discussion ends when a comment step (in a council, a review) has no objections, which the page calls agreed, or when the round limit is reached.
+
+- **No objections, but suggestions.** Each member whose answer got suggestions (in a council, the author) writes one closing version that takes in the suggestions it accepts, and lists the others under `## Responses`. The discussion ends there.
+- **The result** is each member's latest answer, or the council's one shared answer. When the round limit ended the discussion, the page also shows the objections from the last comments with each author's responses, or in a council the last reviews that still object.
+
+### Rewrites are checked against your material
+
+When an answer rewrites, summarizes or quotes something you provided (an attached file, text in the question, a file in the folder), whoever comments on it or reviews it goes through it line by line against the source. A sentence that claims more than the source is an objection, quoted next to the source's own wording: a stronger role or credit for someone, a cause, method or number the source doesn't give, a dropped qualifier such as "estimated", an added list item, or a placeholder written as if it were known. Voters count such claims as problems, and every member checks its own changed claims before handing in an update, merge, revision or closing version. A change of wording that keeps the meaning is not an objection.
+
+### Where you come in
+
+fugue pauses and names the next step, for example "Next: each comments on the other's answer", and you move it on when you're ready. Two members pause after every step, except that an agreement with suggestions goes straight on to the closing version. A council pauses after its vote (to see the points, and start from another answer if you like) and after each revision. At any time you can:
+
+- add a note to every member or just one; it goes into the next message fugue sends that member;
+- stop the members mid-step;
+- ask for one more round, also after they agreed or reached the limit;
+- ask a follow-up question, which starts again with independent answers;
+- change the round limit, or switch off pausing to let the discussion run to the end by itself. Changing these never starts the members on its own; Continue does.
+
+If a member fails or is stopped, the discussion waits; continuing retries just that member with the same message.
+
+### Sessions, letters and what each member has seen
+
+fugue runs each tool headless (`claude -p`, `codex exec`, `dsh --profile headless`). Each member has one session for the whole discussion, and fugue resumes it at every step (`claude --resume`, `codex exec resume`, `dsh … --session-id`), so the member remembers its own earlier reasoning and fugue only sends what is new. fugue records which replies each member has already received, so nothing is forwarded twice or skipped. While a member works, fugue reads its live output (`--output-format stream-json` from Claude Code, `--json` from Codex and dsh) and shows what it is doing: "Read src/cache.py", "$ rg -n cache src", how far Claude has got while it thinks ("Thinking · about 12k tokens so far"; at high effort it can think for minutes before writing), and then the reply as it is written.
+
+Members are never told which tool or model the others run. Each gets a letter for the whole discussion (A to D), drawn at random when it starts, so the first member you choose isn't always A. Every message after your first question tells the member its own letter and the others'; forwarded replies are marked with their author and step (`from="member B" step="2"`), so a member that cites a step means the same one you see; and members write about themselves as "I" and refer to each other only by letter, which means the same member to whoever reads a reply. The page, the transcript and `fugue status` show you who is who, for example "Claude (member A)", or "Codex · gpt-6.1-sol · high (member B)" when two members use the same tool.
+
+Members running the same model tend to make the same mistakes and agree on them, so they catch less; different tools or models work best, and the page warns when two members run the same model.
+
+The exact wording sent to the members is in [src/fugue/prompts.py](src/fugue/prompts.py); edit it there to change how they talk to each other.
+
+## Reference
+
+### What the members may do
+
+Members may read files and run commands, but not change anything: several agents editing the same checkout at the same time would trip over each other, and fugue is meant for analysis. Each runs in its tool's own sandbox, where macOS itself refuses writes. These settings apply to fugue's runs only; your own settings for each tool are not changed.
+
+- **Claude Code** runs in its sandbox, set with `--settings`. Nobody can answer permission prompts in a headless run, so Claude runs in "don't ask" mode, where anything that would ask is refused; Bash is allowed outright because every command runs inside the sandbox. The sandbox refuses writes to the project and your home folder (the temp folder stays writable, as some tools need it), refuses network access, refuses to start a command outside itself, and the run fails rather than going ahead if the sandbox can't start. Claude's own file tools can't write (`Edit`, `Write` and `NotebookEdit` are turned off), and its Read tool may read any file except in `~/.ssh` and `~/.aws`. If your Claude settings list `sandbox.excludedCommands`, those commands would run outside the sandbox, so fugue then stops allowing Bash outright and Claude only gets the commands the sandbox approves by itself.
+- **Codex** runs in its `read-only` sandbox, which also refuses its own file editor (`apply_patch`). What in your Codex setup acts outside that sandbox is switched off: the apps connector (`--disable apps`), and every plugin and MCP server that is on in `~/.codex/config.toml` (computer use, Chrome, `node_repl` and so on), each with a `-c ….enabled=false` override. Your model and effort settings still apply.
+- **The DeepSeek Harness** runs in its `read-only` permission mode (`DSH_PERMISSION_MODE=read-only`), in its own sandbox (Seatbelt on macOS), with approvals refused since nobody can answer them. A settings overlay written for each run (`--patch`) sets the member's model and effort, turns off its telemetry (which by default sends session records after a user's feedback) and its extra model call for a session title, and turns on dsh's store of saved keys, which its headless mode leaves off, so runs use the API key you saved in dsh.
+
+**The web.** "Members may use the web" (on by default; `--no-web` on the command line, `web = false` in the config file) applies to every member of a discussion:
+
+- *On:* Claude may use WebSearch and WebFetch; its fetches come from your Mac, so fetches from `localhost` and `127.0.0.1` are refused, while other addresses only your Mac can reach (other local servers, your network) are not blocked. Codex keeps its web search, which runs on OpenAI's servers. The DeepSeek Harness keeps its web tools.
+- *Off:* Claude's WebSearch and WebFetch are switched off, Codex runs with `web_search="disabled"`, and DeepSeek's web tools are switched off in its overlay.
+
+With the web on, a page a member reads could contain instructions aimed at it, for example to send the contents of a file it read somewhere. Switch the web off for sensitive projects.
+
+The exact flags are in `claude_read_only_args`, `codex_isolation_args` and `dsh_overlay` in [src/fugue/agents.py](src/fugue/agents.py).
+
+**Sign-ins.** Each member uses its tool's own sign-in. Claude Code and Codex use their logins (`claude` and `/login`, or `codex login`). DeepSeek members find the key where your own dsh does: saved on dsh's Models page (in `~/.dsh/.credentials.yaml`), then `DEEPSEEK_API_KEY` in the environment, then `~/.dsh/.env` as `DEEPSEEK_API_KEY=…`. The background service doesn't get your shell's variables, so for it the key has to be saved in dsh or in `~/.dsh/.env`. Settings' status check says what it finds, without reading the key.
+
+### Attached files
+
+A question or a follow-up can come with files: PDFs, Word files, images, text, up to 50 MB per question. They are kept in the discussion's own `attachments/` folder, and each member's first message for that question lists them after the question with their kind, size and path.
+
+The members run read-only, so they can't install a PDF reader for themselves; fugue does the converting when a file arrives:
+
+- PDF and Word files get a text version next to them. For PDFs, pypdf reads each page by where its letters sit, so words drawn a few letters at a time stay whole. A PDF without a text layer says so.
+- A PDF's first 10 pages are also rendered as PNG images, with pypdfium2; a longer PDF's note says how many pages were left out.
+- Each member is told what suits its tool: Claude Code opens the PDF itself, Codex is handed the page images and attached images with its message (`--image`), and the DeepSeek Harness is given the page images' paths to open on image-capable models such as DeepSeek Flash.
+- Every member is told that the original is what counts and that a text version can get spacing, order or symbols wrong, so layout and formatting are judged from the original or its page images.
+
+A question doesn't need a project folder: without one (`--no-folder`, or **No folder** on the page), the members work in the attachments folder, which suits reviewing a resume or a design document.
+
+### The web page
 
 `fugue web` serves the page at <http://127.0.0.1:8765/> and opens it. On the left is every discussion, from every project, with a dot on the ones that are working or waiting for you. On the right is the selected discussion:
 
 - **At the top**, the question and one line saying where it stands ("Paused after step 2", "Agreed in step 4"). Attached files are listed under the question; click one to see it on the page (images and PDFs as they are, Word files as the text the members get) or to download it.
-- **The answers**: the step in progress, or once it has finished, each member's latest answer, side by side ("One at a time" shows one member at full width). While a member works you see its last action, then the reply as it is written. An updated answer shows its responses to the comments under it (folded away under the latest answers), and "Changes since step N" shows what changed from that member's version before, word by word. Earlier steps are folded into one line; open it to see each step.
+- **The answers**: the step in progress, or once it has finished, each member's latest answer side by side, or the council's answer ("One at a time" shows one member at full width). While a member works you see its last action, then the reply as it is written. An updated answer shows its responses to the comments under it (folded away under the latest answers), and "Changes since step N" shows what changed from that member's previous version, word by word. A council's vote shows each answer's points, and right after the vote "Start from this one" picks another answer as the starting point. Earlier steps are folded into one line; open it to see each step.
+- **Inspect context**, under each reply, shows the exact message the member got in that step, and everything fugue had sent it up to then, with each part marked by where it came from.
 - **You**: your notes and follow-up questions appear in the discussion as your own entries, saying when they go out ("note to both, goes out with step 3"; in a council, "goes out with member A's next message"), until they are sent.
-- **At the bottom**, one bar for whatever happens next: write your view for the next step (or pick "Follow-up question"), and press the button that names the next step, such as "Continue: each updates their answer". It takes your note along. While a step runs, the same bar has "Pause after this step" and "Stop".
+- **At the bottom**, one bar for whatever happens next: write your view for the next step (or pick "Follow-up question"), and press the button that names the next step, such as "Continue: each updates their answer". It takes your note along, and ⌘↩ presses it. While a step runs, the same bar has "Pause after this step" and "Stop".
 - **⋯** (top right) holds the folder, each member's model and effort, the round limit and pausing, the commands to resume each member's session, and Move to Trash.
 
-- Discussions started from the page run inside the `fugue web` process. Stopping it (Ctrl-C) stops their agents cleanly; continue them from the page later. Discussions started with `fugue start` in a terminal show up on the page live too.
-- To give it its own window and Dock icon, open the page in Safari and choose File → Add to Dock, or in Chrome use "Install page as app".
-- **Settings** (bottom left) holds the defaults for new discussions (rounds, pausing, web access, time limit, and the usual two to four members: each one's tool, model, effort and extra arguments), saved to `~/.config/fugue/config.toml`, which `fugue start` reads too. Saving rewrites that file, so comments in it are not kept. Below them is a status check: whether `claude`, `codex` and `dsh` are found and logged in (checked without calling a model), their versions, what fugue switches off in Codex for its runs, desktop notifications (turn them on there to hear when a discussion stops and needs you), whether the background service is running, and where discussions are stored.
-- **Move to Trash**, in a discussion's ⋯, moves it to the Trash, where Finder can restore it. The members' own sessions are kept, so `claude --resume`, `codex resume` and the DeepSeek Harness still find them. It isn't offered while the discussion runs.
+"Changes since step N" folds away what stayed the same and marks the words that changed:
+
+![Both members' closing versions shown as changes since step 3: unchanged lines folded, and the added words of one changed line highlighted in each](docs/images/changes.png)
+
+"Inspect context" shows what a member was sent, with each part marked by where it came from:
+
+![The context inspector for Claude (member A) in step 3: fugue's message with Codex's forwarded comments highlighted in Codex's colour, followed by fugue's instructions for the update](docs/images/context.png)
+
+A few more things to know:
+
+- Discussions started from the page run inside the `fugue web` process. Stopping it (Ctrl-C) stops their agents cleanly; continue them from the page later.
+- **Move to Trash** moves a discussion to the Trash, where Finder can restore it (on a system without the `trash` command, to `~/.fugue/trash/`). The members' own sessions are kept, so `claude --resume`, `codex resume` and the DeepSeek Harness still find them. It isn't offered while the discussion runs.
+- To give the page its own window and Dock icon, open it in Safari and choose File → Add to Dock, or in Chrome use "Install page as app".
 - The server only listens on 127.0.0.1, and every request must carry a random token that only the page it serves receives, so other websites open in your browser can't use it to start agents.
 
-### Keeping it running in the background (macOS)
+### Settings
 
-So that the page answers without a terminal window left open, install `fugue web` as a background service:
+**Settings**, at the bottom left of the page, holds the defaults for new discussions: the round limit, pausing, web access, the time limit for each member's step, and the usual two to four members, each with its tool, model, effort and extra arguments. They are saved to `~/.config/fugue/config.toml` (or `$FUGUE_CONFIG`), which `fugue start` reads too. Saving rewrites that file, so comments in it are not kept.
 
-```bash
-fugue service install      # start it now, and at every login
-fugue service status       # is it running, and does the page answer?
-fugue service restart      # after changing fugue's Python code
-fugue service uninstall    # stop it and remove it
-```
+Below them is a status check: whether `claude`, `codex` and `dsh` are found and signed in (checked without calling a model), their versions, what fugue switches off in Codex for its runs, desktop notifications (turn them on there to hear when a discussion stops and needs you), whether the background service is running, and where discussions are stored.
 
-`install` writes a launchd agent to `~/Library/LaunchAgents/ai.fugue.web.plist` and starts it. launchd runs `fugue web --no-open` when you log in and starts it again if it stops. Its output goes to `~/.fugue/web.log`. With the service running, the page is always at <http://127.0.0.1:8765/> (`--port` changes this), and typing `fugue web` just opens it. Discussions started from the page now run in the service; `restart` and `uninstall` stop their agents cleanly, as Ctrl-C would.
+#### Members: tool, model and effort
 
-- **Run `install` from a shell where `claude` and `codex` work.** The service gets that shell's `PATH`, `LANG` (`en_US.UTF-8` if the shell has none) and `FUGUE_*` settings, so it finds `claude`, `codex`, `uv` and whatever the agents run. Other variables from your shell profile are not passed on. If you change your PATH later, run `install` again; that also replaces a running service.
-- **Folder access.** macOS protects Desktop, Documents and Downloads from programs started in the background; in a terminal, the terminal app's permission covers them. The service runs as fugue's Python (`python3.11`, installed by uv), so macOS asks whether `python3.11` may access a protected folder the first time the service reads from one, unless you have already allowed that Python before. Click Allow. If your clone is in one of those folders and the install is editable, that happens during `fugue service install`, which waits for the page to answer. Agents working in a project under Documents or Downloads cause the same question the first time. If no question appears and the page doesn't answer, give that Python Full Disk Access: System Settings → Privacy & Security → Full Disk Access, click +, press Cmd-Shift-G and enter the Python path that `install` and `status` print when the page doesn't answer (`readlink -f ~/.local/share/uv/tools/agent-fugue/bin/python` also shows it). The service tries again every 10 seconds. The permission belongs to that exact Python program, so macOS asks again after uv updates Python 3.11.
-- **Login Items.** macOS shows a "Background Items Added" notification when the service is installed, and lists it in System Settings → General → Login Items & Extensions. Switching it off there stops it from starting.
-- Changes to the page (HTML, JavaScript, CSS) show up when you reload it; changes to fugue's Python code need `fugue service restart`.
-
-## Command line
-
-| Command | What it does |
-|---|---|
-| `fugue web` | Open the web page (`--port`, `--no-open`). |
-| `fugue service install` | Keep the web page running in the background on macOS; also `status`, `restart`, `uninstall`. |
-| `fugue start "question"` | Start a discussion; every member answers, then it goes on to the first pause. `--member` (two to four times) picks the members, `--attach FILE` (repeatable) attaches files, `--no-folder` asks without a project folder, `-n 3` sets the round limit, `--no-pause` runs every step without waiting for you, `--no-web` keeps every member off the web. |
-| `fugue continue` | Run the next step (it says which), or retry the agents that failed or were stopped. |
-| `fugue next` | Run one more round, also after they agreed or reached the limit. |
-| `fugue ask "question"` | Ask a follow-up in the same discussion (`--attach FILE` to attach files). |
-| `fugue revote` | A council of three or four: every member answers again and the council votes again on where to start. |
-| `fugue note "text"` | Add your own view to the next step, for every member or one (`--to A`, `--to B`, ...). |
-| `fugue pause` / `fugue stop` | Pause after the current round / stop the agents now. Works on a discussion running in another terminal or the page. |
-| `fugue status` | Who the members are, the steps so far, objection counts, the next step, usage, and the commands to continue either member's session yourself. |
-| `fugue show [step]` | Print the replies from a step, numbered from 1 (default: the last; `--member A` for one member). `--prompt` shows exactly what fugue sent instead. |
-| `fugue models` | The models and effort levels you can choose for each tool, and what each one uses when you choose nothing (`--refresh` asks Codex again). |
-| `fugue list` | All discussions, newest first (`--here` for this folder only). |
-| `fugue open` | Open the discussion's `transcript.md` in your default Markdown app. |
-| `fugue delete ID` | Move a discussion to the Trash (asks first; `--yes` doesn't). |
-
-Questions and notes can also come from a file (`-f question.md`), from stdin (`-`), or from your `$EDITOR` if you leave the text out. Commands work on the latest discussion in the current folder unless you pass `-d <id>`; the start of the id is enough.
-
-### Continuing in an agent yourself
-
-The members' sessions are ordinary sessions of their tool. `fugue status` (or "Copy resume command for member A" in a discussion's ⋯ on the page) gives you, for example:
-
-```
-cd ~/code/my-repo && claude --resume 6f1c...
-cd ~/code/my-repo && codex resume 0199...
-cd ~/code/my-repo && dsh --profile headless --patch ~/.fugue/discussions/.../logs/03-C.dsh-patch.yml --session-id session-7a2e... "<your message>"
-```
-
-Run the Claude or Codex one to continue in that agent's interactive interface, with everything from the discussion in its memory, for instance to have it implement the agreed plan. The DeepSeek Harness opens a session by id only in headless mode, so its command sends one message (put yours in place of `<your message>`) and prints the answer; run it again for the next message. It uses the settings of the member's last run in the discussion (model, effort, and the API key saved in dsh), but not the discussion's read-only mode, so the agent can change files in the project.
-
-## Settings
-
-### Members: tool, model and effort
-
-Each discussion has two to four members, each a tool (`claude`, `codex` or `dsh`) with a model and an effort level. On the page, the New question form starts from your usual line-up in Settings, and what it shows is what runs: add or remove members, or change a member's tool, model, effort or extra arguments, for this discussion only. On the command line, give `--member TOOL[:MODEL[:EFFORT]]` two to four times, leaving out a part to use the tool's own default:
+Each discussion has two to four members, each a tool (`claude`, `codex` or `dsh`) with a model and an effort level; members can use the same tool, for example two Codex members with different models. On the page, the New question form starts from your usual line-up in Settings, and what it shows is what runs: add or remove members, or change a member's tool, model, effort or extra arguments, for this discussion only. On the command line, give `--member TOOL[:MODEL[:EFFORT]]` two to four times, leaving out a part to use the tool's own default:
 
 ```bash
 fugue start "..." --member claude:claude-opus-5-5:high --member codex:gpt-6.1-sol:medium
@@ -168,9 +218,7 @@ Without `--member`, the line-up saved in Settings (or the config file) is used.
 - **Where the lists come from.** Codex reports its own models: fugue asks `codex debug models` (and keeps a copy for a day; "Ask Codex again" on the page or `fugue models --refresh` asks again), so new Codex models show up by themselves, each with the effort levels it accepts. Claude Code and the DeepSeek Harness have no such command, so fugue carries short lists in [src/fugue/models.py](src/fugue/models.py): Claude Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5, each taking `low` to `max`; DeepSeek Flash and DeepSeek V4 Pro, each taking `off`, `low`, `high` or `max`. Add a line there when a new one comes out. "Other model id…" takes any id the tool accepts.
 - **Effort levels are checked.** The effort menu only offers the levels the chosen model accepts, and `fugue start` refuses a level the model doesn't take.
 - **Default means fugue passes nothing**, so the tool uses its own settings: Claude Code its `model` in `~/.claude/settings.json` and its own effort, Codex the `model` and `model_reasoning_effort` in `~/.codex/config.toml`, dsh its profile's model (DeepSeek Flash at high effort unless you changed it). The menus show what that is, and `fugue models` prints it.
-- How they reach the tools: Claude gets `--model ID --effort LEVEL`; Codex gets `-m ID -c model_reasoning_effort="LEVEL"`; dsh gets them in its overlay (`model`, `reasoningEffort`).
-
-### Other settings
+- **How they reach the tools.** Claude gets `--model ID --effort LEVEL`; Codex gets `-m ID -c model_reasoning_effort="LEVEL"`; dsh gets them in its overlay (`model`, `reasoningEffort`).
 
 Each member's extra arguments for its tool (`claude -p`, `codex exec` or `dsh --profile headless`) are in its row on the page. On the command line, `--member-args` goes with the `--member` in the same position; the time limit is `--timeout`:
 
@@ -180,15 +228,13 @@ fugue start "..." --member claude --member codex --member-args="--add-dir ../sha
 
 Use the `--member-args="..."` form with `=`, since the value itself starts with dashes.
 
-### Defaults for every discussion
-
-They go in `~/.config/fugue/config.toml`:
+#### The config file
 
 ```toml
-timeout_minutes = 30
+timeout_minutes = 30           # give up on a member's step after this long
 max_rounds = 2                 # rounds of comments and updates (of review and revision, in a council)
-pause_after_each_round = true  # false: run every round without waiting for you
-web = true                     # false: neither member may use the web
+pause_after_each_round = true  # false: run every step without waiting for you
+web = true                     # false: no member may use the web
 
 # The usual members (two to four), in order. Leave out model or effort for the tool's own default.
 [[members]]
@@ -205,33 +251,89 @@ args = []                      # extra arguments for `codex exec`
 
 Values given when starting a discussion override the file; `--member` replaces the whole line-up. Config files from before members, with a `[claude]` and a `[codex]` table, still work, and saving Settings rewrites them as `[[members]]`.
 
-## Files
+### Keeping the page running in the background (macOS)
+
+So that the page answers without a terminal window left open, install `fugue web` as a background service:
+
+```bash
+fugue service install      # start it now, and at every login
+fugue service status       # is it running, and does the page answer?
+fugue service restart      # after changing fugue's Python code
+fugue service uninstall    # stop it and remove it
+```
+
+`install` writes a launchd agent to `~/Library/LaunchAgents/ai.fugue.web.plist` and starts it. launchd runs `fugue web --no-open` when you log in and starts it again if it stops. Its output goes to `~/.fugue/web.log`. With the service running, the page is always at <http://127.0.0.1:8765/> (`install --port` changes this), and typing `fugue web` just opens it. Discussions started from the page then run in the service; `restart` and `uninstall` stop their agents cleanly, as Ctrl-C would.
+
+- **Run `install` from a shell where the members' tools work.** The service gets that shell's `PATH`, `LANG` (`en_US.UTF-8` if the shell has none) and `FUGUE_*` settings, so it finds `claude`, `codex`, `dsh`, `uv` and whatever the agents run. Other variables from your shell profile are not passed on. If you change your PATH later, run `install` again; that also replaces a running service.
+- **Folder access.** macOS protects Desktop, Documents and Downloads from programs started in the background; in a terminal, the terminal app's permission covers them. The service runs as fugue's Python (`python3.11`, installed by uv), so macOS asks whether `python3.11` may access a protected folder the first time the service reads from one, unless you have already allowed that Python. Click Allow. If your clone is in one of those folders and the install is editable, that happens during `fugue service install`, which waits for the page to answer. Agents working in a project under Documents or Downloads cause the same question the first time. If no question appears and the page doesn't answer, give that Python Full Disk Access: System Settings → Privacy & Security → Full Disk Access, click +, press Cmd-Shift-G and enter the Python path that `install` and `status` print when the page doesn't answer (`readlink -f ~/.local/share/uv/tools/agent-fugue/bin/python` also shows it). The service tries again every 10 seconds. The permission belongs to that exact Python program, so macOS asks again after uv updates Python 3.11.
+- **Login Items.** macOS shows a "Background Items Added" notification when the service is installed, and lists it in System Settings → General → Login Items & Extensions. Switching it off there stops it from starting.
+- Changes to the page (HTML, JavaScript, CSS) show up when you reload it; changes to fugue's Python code need `fugue service restart`.
+
+### Command line
+
+| Command | What it does |
+|---|---|
+| `fugue web` | Open the web page (`--port`, `--no-open`). |
+| `fugue service install` | Keep the web page running in the background on macOS; also `status`, `restart`, `uninstall`. |
+| `fugue start "question"` | Start a discussion; every member answers, then it goes on to the first pause. `--member` (two to four times) picks the members, `--attach FILE` (repeatable) attaches files, `--cwd DIR` sets the folder (default: the current one), `--no-folder` asks without one, `-n 3` sets the round limit, `--no-pause` runs every step without waiting for you, `--no-web` keeps every member off the web, `--title` names the discussion. |
+| `fugue continue` | Run the next step (it says which), or retry the members that failed or were stopped. |
+| `fugue next` | Run one more round, also after they agreed or reached the limit. |
+| `fugue ask "question"` | Ask a follow-up in the same discussion (`--attach FILE` to attach files). |
+| `fugue revote` | A council of three or four: every member answers again and the council votes again on where to start. |
+| `fugue note "text"` | Add your own view to the next step, for every member or one (`--to A`, `--to B`, ...). |
+| `fugue pause` / `fugue stop` | Pause after the current step / stop the members now. Works on a discussion running in another terminal or the page. |
+| `fugue status` | Who the members are, the steps so far, objection counts, the next step, usage, and the commands to continue each member's session yourself. |
+| `fugue show [step]` | Print the replies from a step, numbered from 1 (default: the last; `--member A` for one member). `--prompt` shows exactly what fugue sent instead. |
+| `fugue models` | The models and effort levels you can choose for each tool, and what each one uses when you choose nothing (`--refresh` asks Codex again). |
+| `fugue list` | All discussions, newest first (`--here` for this folder only). |
+| `fugue open` | Open the discussion's `transcript.md` in your default Markdown app. |
+| `fugue delete ID` | Move a discussion to the Trash (asks first; `--yes` doesn't). |
+
+Questions and notes can also come from a file (`-f question.md`), from stdin (`-`), or from your `$EDITOR` if you leave the text out. Commands work on the latest discussion in the current folder unless you pass `-d <id>`; the start of the id is enough. Commands that run steps print each reply as it finishes; `-q` prints only the progress.
+
+### Continuing in an agent yourself
+
+The members' sessions are ordinary sessions of their tool. `fugue status` (or "Copy resume command for member A" in a discussion's ⋯ on the page) gives you, for example:
+
+```
+cd ~/code/my-repo && claude --resume 6f1c...
+cd ~/code/my-repo && codex resume 0199...
+cd ~/code/my-repo && dsh --profile headless --patch ~/.fugue/discussions/.../logs/03-C.dsh-patch.yml --session-id session-7a2e... "<your message>"
+```
+
+Run the Claude or Codex one to continue in that agent's interactive interface, with everything from the discussion in its memory, for instance to have it implement the agreed plan. The DeepSeek Harness opens a session by id only in headless mode, so its command sends one message (put yours in place of `<your message>`) and prints the answer; run it again for the next message. It uses the settings of the member's last run in the discussion (model, effort, and the API key saved in dsh), but not the discussion's read-only mode, so the agent can change files in the project.
+
+### Where files are kept
 
 Discussions are kept outside your projects, in `~/.fugue/discussions/` (or `$FUGUE_HOME/discussions/`), so the agents never come across them while exploring the code.
 
 ```
 ~/.fugue/discussions/20261019-153012-why-does-the-embedding/
   transcript.md                  the whole discussion, readable top to bottom
-  state.json                     rounds, sessions, the status of each reply
+  state.json                     members, steps, sessions, the status of each reply
   events.jsonl                   everything that happened, in order; the page reads this live
   control.json                   round limit, pause and stop settings
   inbox.json                     your notes and requests waiting for the next step
-  attachments/                   the files attached to its questions, with text versions of PDF and Word files
+  attachments/                   the attached files, with text versions of PDF and Word files and PDF page images
   rounds/00-A.prompt.md          exactly what fugue sent to member A in step 1 (files count from 00)
   rounds/00-A.md                 member A's reply in step 1
-  logs/                          raw output of each agent call, for debugging
+  logs/                          raw output of each agent call, and each dsh run's settings overlay
 ```
 
 Discussions from before members are converted when they are read, and keep their files, which are named after the tool (`00-claude.md`).
 
-## Development
+fugue finds each tool on your PATH; `FUGUE_CLAUDE_BIN`, `FUGUE_CODEX_BIN` and `FUGUE_DSH_BIN` point it at a specific program instead. `FUGUE_PORT` sets the default port for `fugue web` and `fugue service install`.
+
+### Development
 
 ```bash
 uv run pytest
 scripts/demo-web.sh
 ```
 
-The tests run whole discussions, and the web server's API, against two fake agents in `tests/fakes/`. The fakes mimic the live output of `claude -p --output-format stream-json` and `codex exec --json` and log exactly what they were sent. `scripts/demo-web.sh` runs the page against the same fakes (on port 8799, storing discussions in `.demo/`), to try the page without calling either agent.
+The tests run whole discussions, and the web server's API, against fake versions of all three tools in `tests/fakes/`. The fakes mimic the live output of `claude -p --output-format stream-json`, `codex exec --json` and `dsh --profile headless --json`, and log exactly what they were sent. `scripts/demo-web.sh` runs the page against the same fakes (on port 8799, storing discussions in `.demo/`), to try the page without calling any agent.
+
+Each change that users would notice gets a line in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
