@@ -617,12 +617,22 @@ async function refreshDetail() {
   const before = S.detail && S.detail.status.phase;
   S.detail = data;
   S.detailJson = json;
+  if (selecting()) {
+    S.drawLater = true;
+    return;
+  }
   drawDiscussion();
   // Following a discussion as it finishes takes you up to its latest answers.
   if (before === 'running' && S.follow && hasResult(data)) {
     S.follow = false;
     $('#main').scrollTop = 0;
   }
+}
+
+// Text you are selecting in the discussion would vanish under a redraw, so redraws wait for it.
+function selecting() {
+  const selection = document.getSelection();
+  return Boolean(selection && !selection.isCollapsed && $('#content').contains(selection.anchorNode));
 }
 
 function scrollToBottom() {
@@ -789,6 +799,7 @@ function filePicker({ target, onadd } = {}) {
 // and the rounds that led to the answers are folded into one line.
 
 function drawDiscussion() {
+  S.drawLater = false;
   const d = S.detail;
   const main = $('#main');
   const scroll = main.scrollTop;
@@ -797,7 +808,7 @@ function drawDiscussion() {
     discussionHead(d),
     questionBlock(d),
     ['stopped', 'paused'].includes(d.status.phase) && d.status.detail ? el('div', { class: 'problem' }, d.status.detail) : null,
-    view ? view.node : el('p', { class: 'muted starting' }, 'Starting…'),
+    view ? view.node : el('p', { class: 'muted starting' }, d.status.phase === 'running' ? 'Starting…' : 'Not started yet.'),
     pendingSection(d),
     historySection(d, view ? view.round : null)));
   for (const r of d.rounds) for (const letter of Object.keys(r.entries)) patchCard(r.index, letter);
@@ -985,8 +996,7 @@ function runsWith(d, letter) {
 }
 
 async function deleteDiscussion(d) {
-  const sure = window.confirm(`Move "${d.title}" to the Trash?\n\nYou can restore it from the Trash in Finder. `
-    + "The members' own Claude and Codex sessions are kept.");
+  const sure = window.confirm(`Move "${d.title}" to the Trash?\n\nThe members' own sessions in their tools are kept.`);
   if (!sure) return;
   if (!(await attempt(() => api('DELETE', path())))) return;
   toast('Moved to the Trash.');
@@ -1308,12 +1318,14 @@ function historyRound(d, r) {
     el('span', { class: 'num' }, r.index),
     el('span', { class: 'title' }, roundTitle(r)),
     tally(r),
+    r.kind === 'vote' && r.vote ? el('span', { class: 'tally ok' }, `starting point: ${shortWho(d, r.vote.chosen)}`) : null,
     sentNotes(d, r).length ? el('span', { class: 'you-mark' }, 'with your note') : null,
     el('span', { class: 'spacer' }),
     el('span', { class: 'brief' }, shown.map((letter) => `${shortWho(d, letter)} ${stateText(shownEntry(d, r.entries[letter]))}`).join(' · '))),
     open ? el('div', { class: 'hround-body' },
       r.kind === 'answer' && r.index > 0 && !r.reopen ? followupBlock(r) : null,
       sentNotes(d, r),
+      r.kind === 'vote' ? voteBoard(d, r) : null,
       pairOf(d, shown, (letter) => card(r, letter))) : null);
 }
 
@@ -1502,8 +1514,9 @@ function contextItem(d, letter, item) {
     return contextBlock(`src-m ${memberClass(d, letter)}`, `Round ${item.round} · ${d.members[letter].name} replied`, item.text);
   }
   if (item.kind === 'answer' && item.round === 0) {
-    // The first message is your question, sent exactly as you wrote it.
-    return contextBlock('src-you', `Round ${item.round} · your question, sent as you wrote it`, item.text);
+    // The first message is your question as you wrote it, followed by the list of attached files if any.
+    const files = d.attachments && d.attachments.length ? ', then the list of attached files' : '';
+    return contextBlock('src-you', `Round ${item.round} · your question as you wrote it${files}`, item.text);
   }
   return el('div', { class: 'ctx-msg' },
     el('div', { class: 'ctx-label' }, `Round ${item.round} · message from fugue`),
@@ -1606,7 +1619,10 @@ function setMode(mode) {
       : phase === 'running' ? `Add a note to ${who} for the next round`
         : `Add your view for the next round, to ${who} (optional)`;
     hint = `It goes into the next message fugue sends to ${who}.`;
+    const n = S.picker.files.length;
+    if (n) hint += ` ${n === 1 ? 'Your file waits' : `Your ${n} files wait`} for a follow-up question; notes don't carry files.`;
   }
+  $('#composer-files').hidden = mode !== 'ask';
   $('#composer-text').placeholder = placeholder;
   drawBar(d);
   $('#composer-hint').textContent = `${hint} ⌘↩ presses “${S.primary ? S.primary.textContent : ''}”.`;
@@ -1753,21 +1769,26 @@ function nextRoundText(d) {
 function pendingSection(d) {
   const items = [];
   const seen = new Set();
-  const when = nextRoundText(d);
+  // In a council not every member takes part in every round, so a note waits for its member's next message.
+  const when = (letter, shared) => (!d.council ? nextRoundText(d)
+    : shared ? "each member's next message" : `member ${letter}'s next message`);
   for (const letter of letters(d)) {
     (d.inbox.notes[letter] || []).forEach((note, index) => {
       if (note.shared && seen.has(note.text)) return;
       if (note.shared) seen.add(note.text);
       const remove = () => api('DELETE', path('notes'), { member: letter, index });
-      items.push(youEntry(`${note.shared ? `note to ${everyone(d)}` : `note to member ${letter}`}, goes out with ${when}`, note.text,
+      items.push(youEntry(`${note.shared ? `note to ${everyone(d)}` : `note to member ${letter}`}, goes out with ${when(letter, note.shared)}`, note.text,
         editLink(remove, note.text, note.shared ? 'both' : letter), removeLink(remove)));
     });
   }
   for (const r of d.inbox.requests) {
     const remove = () => api('DELETE', path('requests', r.id));
     if (r.type === 'ask') {
-      items.push(youEntry('follow-up question, asked once the current round is done', r.question,
-        editLink(remove, r.question, 'ask'), removeLink(remove)));
+      const entry = youEntry('follow-up question, asked once the current round is done', r.question,
+        editLink(remove, r.question, 'ask', r.attachments), removeLink(remove));
+      const files = attachmentList(d, r.attachments);
+      if (files) entry.append(files);
+      items.push(entry);
     } else {
       items.push(youEntry('asked for one more round', '', removeLink(remove, 'Cancel')));
     }
@@ -1779,14 +1800,21 @@ function removeLink(remove, label = 'Remove') {
   return el('button', { type: 'button', class: 'link', onclick: () => attempt(async () => { await remove(); refreshSoon(); }) }, label);
 }
 
-// Takes a waiting note or question back into the box to change it.
-function editLink(remove, text, mode) {
+// Takes a waiting note or question, with its files, back into the box to change it.
+function editLink(remove, text, mode, records = []) {
   return el('button', {
     type: 'button',
     class: 'link',
     onclick: () => attempt(async () => {
+      const d = S.detail;
+      const files = await Promise.all((records || []).map(async (a) => {
+        const response = await fetch(fileUrl(d, a.name));
+        if (!response.ok) throw new Error(`Couldn't take back ${a.name}.`);
+        return new File([await response.blob()], a.name);
+      }));
       await remove();
       S.modeChosen = true;
+      S.picker.set(files);
       setMode(mode);
       const box = $('#composer-text');
       box.value = text;
@@ -2300,10 +2328,16 @@ function init() {
   });
   $('#main').addEventListener('scroll', () => {
     const main = $('#main');
-    S.follow = main.scrollTop + main.clientHeight >= main.scrollHeight - 80;
+    S.follow = main.scrollTop + main.clientHeight >= main.scrollHeight - 10;
     markStuck();
   }, { passive: true });
   window.addEventListener('hashchange', route);
+  document.addEventListener('selectionchange', () => {
+    if (S.drawLater && !selecting() && S.detail) {
+      S.drawLater = false;
+      drawDiscussion();
+    }
+  });
   setInterval(tick, 1000);
   setInterval(refreshList, 2000);
   setInterval(() => { if (S.id && !document.hidden) refreshDetail(); }, 5000);
